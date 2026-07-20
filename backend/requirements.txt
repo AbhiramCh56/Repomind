@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+pydantic
+pydantic-settings
+
+pyjwt
+python-multipart
+pydantic-settings
+bcrypt
+pyjwt
+python-multipart
+GitPython
+pathspec
