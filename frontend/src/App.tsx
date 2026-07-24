@@ -56,6 +56,14 @@ export default function App() {
   const [repoUrl, setRepoUrl] = useState("");
   const [repositories, setRepositories] = useState<any[]>([]);
 
+  // Chat State
+  const [selectedRepoId, setSelectedRepoId] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [chatHistory, setChatHistory] = useState<
+    { role: string; text: string }[]
+  >([]);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+
   useEffect(() => {
     // Check if any repo is currently processing
     const isProcessing = repositories.some(
@@ -135,10 +143,74 @@ export default function App() {
     try {
       const res = await api.get("/repos/");
       setRepositories(res.data);
+      // Auto-select the first completed repo if none is selected
+      if (!selectedRepoId && res.data.length > 0) {
+        const firstCompleted = res.data.find(
+          (r: any) => r.status === "completed" && r.has_embeddings,
+        );
+        if (firstCompleted) {
+          setSelectedRepoId(firstCompleted.id);
+        }
+      }
     } catch (err: any) {
       setMessage(
         `Fetch Repos Error: ${err.response?.data?.detail || err.message}`,
       );
+    }
+  };
+
+  const handleDeleteRepo = async (repoId: string) => {
+    try {
+      await api.delete(`/repos/${repoId}`);
+      setMessage("Repository deleted successfully.");
+      if (selectedRepoId === repoId) setSelectedRepoId("");
+      handleFetchRepos();
+    } catch (err: any) {
+      setMessage(
+        `Delete Repo Error: ${err.response?.data?.detail || err.message}`,
+      );
+    }
+  };
+
+  const handleReprocessRepo = async (repoId: string) => {
+    try {
+      await api.post(`/repos/${repoId}/reprocess`);
+      setMessage("Repository re-import started...");
+      handleFetchRepos();
+    } catch (err: any) {
+      setMessage(
+        `Reprocess Repo Error: ${err.response?.data?.detail || err.message}`,
+      );
+    }
+  };
+
+  const handleAskQuestion = async () => {
+    if (!chatInput.trim() || !selectedRepoId) return;
+
+    const newHistory = [...chatHistory, { role: "user", text: chatInput }];
+    setChatHistory(newHistory);
+    setChatInput("");
+    setIsChatLoading(true);
+
+    try {
+      const res = await api.post("/chat/", {
+        repository_id: selectedRepoId,
+        question: chatInput,
+      });
+      setChatHistory([
+        ...newHistory,
+        { role: "assistant", text: res.data.answer },
+      ]);
+    } catch (err: any) {
+      setChatHistory([
+        ...newHistory,
+        {
+          role: "assistant",
+          text: `Error: ${err.response?.data?.detail || err.message}`,
+        },
+      ]);
+    } finally {
+      setIsChatLoading(false);
     }
   };
 
@@ -147,60 +219,205 @@ export default function App() {
       style={{
         padding: "2rem",
         fontFamily: "sans-serif",
-        maxWidth: "600px",
+        maxWidth: "800px",
         margin: "0 auto",
+        display: "flex",
+        gap: "2rem",
       }}
     >
-      <h1>RepoMind AI - Auth & Repo Test</h1>
-      <div
-        style={{
-          marginBottom: "1rem",
-          padding: "1rem",
-          background: "#f0f0f0",
-          borderRadius: "8px",
-        }}
-      >
-        <input
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="Email"
-        />
-        <br />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="Password"
-        />
-        <br />
-        <button onClick={handleRegister}>Register</button>
-        <button onClick={handleLogin}>Login</button>
-      </div>
-      <p>{message}</p>
-      {userProfile && (
+      {/* Left Column: Auth & Repos */}
+      <div style={{ flex: 1 }}>
+        <h1>RepoMind AI - Workspace</h1>
         <div
           style={{
-            marginTop: "20px",
+            marginBottom: "1rem",
             padding: "1rem",
-            background: "#e0ffe0",
+            background: "#f0f0f0",
             borderRadius: "8px",
           }}
         >
-          <h3>Profile</h3>
-          <pre>{JSON.stringify(userProfile, null, 2)}</pre>
-          <h3>Repositories</h3>
           <input
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            placeholder="GitHub URL"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
           />
-          <button onClick={handleAddRepo}>Import</button>
-          <button onClick={handleFetchRepos}>Refresh List</button>
-          {repositories.map((repo) => (
-            <div key={repo.id}>
-              {repo.full_name} - {repo.status}
-            </div>
-          ))}
+          <br />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+          />
+          <br />
+          <button onClick={handleRegister}>Register</button>
+          <button onClick={handleLogin}>Login</button>
+        </div>
+        <p>{message}</p>
+        {userProfile && (
+          <div
+            style={{
+              marginTop: "20px",
+              padding: "1rem",
+              background: "#e0ffe0",
+              borderRadius: "8px",
+            }}
+          >
+            <h3>Profile</h3>
+            <pre>{JSON.stringify(userProfile, null, 2)}</pre>
+            <h3>Repositories</h3>
+            <input
+              value={repoUrl}
+              onChange={(e) => setRepoUrl(e.target.value)}
+              placeholder="GitHub URL"
+            />
+            <button onClick={handleAddRepo}>Import</button>
+            <button onClick={handleFetchRepos}>Refresh List</button>
+            <ul style={{ paddingLeft: "20px" }}>
+              {repositories.map((repo) => (
+                <li key={repo.id} style={{ marginBottom: "10px" }}>
+                  <strong>{repo.full_name}</strong> - {repo.status}
+                  {repo.status === "completed" && !repo.has_embeddings && (
+                    <span
+                      style={{
+                        color: "#d9534f",
+                        marginLeft: "10px",
+                        fontSize: "0.85em",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      (No Embeddings - Reprocess Required)
+                    </span>
+                  )}
+                  <br />
+                  <button
+                    onClick={() => handleReprocessRepo(repo.id)}
+                    style={{
+                      marginRight: "5px",
+                      fontSize: "12px",
+                      marginTop: "4px",
+                    }}
+                  >
+                    Re-import
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRepo(repo.id)}
+                    style={{
+                      fontSize: "12px",
+                      color: "#d9534f",
+                      marginTop: "4px",
+                    }}
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Right Column: Chat Interface */}
+      {userProfile && (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            background: "#f9f9f9",
+            borderRadius: "8px",
+            padding: "1rem",
+            border: "1px solid #ccc",
+          }}
+        >
+          <h3>Chat with Repository</h3>
+
+          <div style={{ marginBottom: "10px" }}>
+            <label>Select Repo: </label>
+            <select
+              value={selectedRepoId}
+              onChange={(e) => setSelectedRepoId(e.target.value)}
+              style={{ width: "100%", padding: "5px" }}
+            >
+              <option value="" disabled>
+                Select a repository...
+              </option>
+              {repositories
+                .filter((r) => r.status === "completed" && r.has_embeddings)
+                .map((repo) => (
+                  <option key={repo.id} value={repo.id}>
+                    {repo.full_name}
+                  </option>
+                ))}
+            </select>
+          </div>
+
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              background: "#fff",
+              border: "1px solid #ddd",
+              borderRadius: "4px",
+              padding: "10px",
+              marginBottom: "10px",
+              minHeight: "300px",
+            }}
+          >
+            {chatHistory.length === 0 ? (
+              <p style={{ color: "#888", textAlign: "center" }}>
+                Ask a question about the codebase!
+              </p>
+            ) : (
+              chatHistory.map((msg, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    marginBottom: "10px",
+                    textAlign: msg.role === "user" ? "right" : "left",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      padding: "8px 12px",
+                      borderRadius: "16px",
+                      background: msg.role === "user" ? "#007bff" : "#e9ecef",
+                      color: msg.role === "user" ? "#fff" : "#000",
+                      maxWidth: "80%",
+                      wordBreak: "break-word",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {msg.text}
+                  </span>
+                </div>
+              ))
+            )}
+            {isChatLoading && (
+              <div style={{ textAlign: "left", color: "#888" }}>
+                Thinking...
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && handleAskQuestion()}
+              placeholder="E.g., What does main.py do?"
+              style={{ flex: 1, padding: "8px" }}
+              disabled={!selectedRepoId || isChatLoading}
+            />
+            <button
+              onClick={handleAskQuestion}
+              disabled={!selectedRepoId || isChatLoading || !chatInput.trim()}
+              style={{ padding: "8px 16px", cursor: "pointer" }}
+            >
+              Send
+            </button>
+          </div>
         </div>
       )}
     </div>

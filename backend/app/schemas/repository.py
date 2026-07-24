@@ -24,6 +24,7 @@ class RepositoryResponse(BaseModel):
     status: RepoStatus
     error_message: str | None
     created_at: datetime
+    has_embeddings: bool = False
 
     class Config:
         from_attributes = True

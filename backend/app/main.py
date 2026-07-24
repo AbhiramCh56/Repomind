@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth,repos
+from app.api.v1 import auth,repos,chat
 from app.db.session import engine, Base
 from app.core.config import settings
 
@@ -25,6 +25,7 @@ app.add_middleware(
 # Include API Routers
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(repos.router, prefix="/api/v1/repos", tags=["Repositories"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat & RAG"])
 
 @app.get("/health")
 def health_check():
