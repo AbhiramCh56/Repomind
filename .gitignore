@@ -2,3 +2,7 @@
 *package.json
 *package-lock.json
 .venv
+**/*.env
+.env.*
+*.env
+backend/.env

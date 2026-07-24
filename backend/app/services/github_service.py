@@ -5,7 +5,9 @@ from app.models.repository import Repository, RepoStatus
 from urllib.parse import urlparse
 import shutil
 
+# IMPORT THE NEW EMBEDDING SERVICE
 from app.services.repo_processor import process_repository_files
+from app.services.embedding_service import embed_repository_chunks
 
 # Where we will store cloned repos on the server
 REPO_STORAGE_DIR = os.getenv("REPO_STORAGE_DIR", "/tmp/repomind_repos")
@@ -51,20 +53,22 @@ def process_repository_background_task(repo_id: str, db: Session):
         # 4. Extract metadata (like the default branch name)
         default_branch = cloned_repo.active_branch.name
 
-        # 5. Update DB on success
+        # 5. Update DB on clone success
         repo.local_path = local_path
         repo.default_branch = default_branch
-        repo.status = RepoStatus.COMPLETED
-        db.commit()
-        print(f"Successfully cloned {repo.full_name}")
-
+        
+        # 6. Process the files and chunk them (AST Parsing)
         print(f"Starting file processing for {repo.full_name}...")
         process_repository_files(str(repo.id), db)
         
-        # 7. Now we are truly done
+        # 7. --- NEW: Generate Embeddings and store in ChromaDB ---
+        print(f"Starting embedding generation for {repo.full_name}...")
+        embed_repository_chunks(str(repo.id), db)
+        
+        # 8. Now we are truly done
         repo.status = RepoStatus.COMPLETED
         db.commit()
-        print(f"Successfully processed {repo.full_name}")
+        print(f"Successfully processed and embedded {repo.full_name}")
 
     except Exception as e:
         # Update DB on failure

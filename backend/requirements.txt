@@ -13,3 +13,10 @@ pyjwt
 python-multipart
 GitPython
 pathspec
+chromadb
+langchain
+langchain-community
+sentence-transformers
+langchain-openai
+langchain-nvidia-ai-endpoints
+langchain-huggingface

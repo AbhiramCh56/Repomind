@@ -3,6 +3,8 @@ import pathspec
 from sqlalchemy.orm import Session
 from app.models.repository import Repository
 from app.models.file import File
+from app.models.chunk import Chunk # <--- ADD THIS
+from app.services.parser import PythonCodeParser # <--- ADD THIS
 
 # A sensible default list of files/directories to ignore
 DEFAULT_IGNORE_PATTERNS = [
@@ -58,6 +60,34 @@ def detect_language(filename: str) -> str:
     _, ext = os.path.splitext(filename)
     return LANGUAGE_MAP.get(ext.lower(), "Unknown")
 
+def naive_chunker(source_code: str, chunk_size: int = 1500):
+    """Fallback chunker that splits raw text into fixed-size blocks by lines."""
+    chunks = []
+    lines = source_code.splitlines()
+    current_chunk = []
+    current_length = 0
+    start_line = 1
+    
+    for i, line in enumerate(lines, 1):
+        current_chunk.append(line)
+        current_length += len(line) + 1 # +1 for newline
+        
+        # If we hit the size limit or the end of the file, save the chunk
+        if current_length >= chunk_size or i == len(lines):
+            if current_chunk:
+                chunks.append({
+                    "chunk_type": "raw_text",
+                    "name": f"Lines {start_line}-{i}",
+                    "content": "\n".join(current_chunk),
+                    "start_line": start_line,
+                    "end_line": i
+                })
+            current_chunk = []
+            current_length = 0
+            start_line = i + 1
+            
+    return chunks
+
 def process_repository_files(repo_id: str, db: Session):
     """
     Walks the cloned repository directory, filters ignored files,
@@ -109,7 +139,6 @@ def process_repository_files(repo_id: str, db: Session):
                     size_bytes=size
                 )
                 
-                # --- NEW PARSING LOGIC ---
                 # We must commit the file first so we have a file.id to link the chunks to
                 db.add(new_file)
                 db.commit()
@@ -117,29 +146,33 @@ def process_repository_files(repo_id: str, db: Session):
                 
                 chunks_to_insert = []
                 
+                # Read the file content once
+                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    source_code = f.read()
+                
+                # 1. SMART PARSING FOR PYTHON
                 if language == "Python":
-                    with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        source_code = f.read()
-                        
                     parser = PythonCodeParser(source_code)
                     extracted_blocks = parser.parse()
+                # 2. NAIVE CHUNKING FOR EVERYTHING ELSE (Markdown, JS, etc.)
+                else:
+                    extracted_blocks = naive_chunker(source_code)
                     
-                    for block in extracted_blocks:
-                        new_chunk = Chunk(
-                            file_id=new_file.id,
-                            chunk_type=block["chunk_type"],
-                            name=block["name"],
-                            content=block["content"],
-                            start_line=block["start_line"],
-                            end_line=block["end_line"]
-                        )
-                        chunks_to_insert.append(new_chunk)
+                for block in extracted_blocks:
+                    new_chunk = Chunk(
+                        file_id=new_file.id,
+                        chunk_type=block["chunk_type"],
+                        name=block["name"],
+                        content=block["content"],
+                        start_line=block["start_line"],
+                        end_line=block["end_line"]
+                    )
+                    chunks_to_insert.append(new_chunk)
                         
                 # Bulk insert the chunks for this file
                 if chunks_to_insert:
                     db.add_all(chunks_to_insert)
                     db.commit()
-                # -----------------------
                 
             except Exception as e:
                 print(f"Error processing file {rel_file_path}: {e}")
