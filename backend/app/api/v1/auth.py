@@ -45,7 +45,7 @@ def login(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=True, # Ensure this is True in production (HTTPS)
+        secure=settings.ENVIRONMENT == "production",
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
     )
@@ -75,7 +75,7 @@ def refresh_token(refresh_token: str = Cookie(None)):
 @router.post("/logout")
 def logout(response: Response):
     """Clear the refresh token cookie."""
-    response.delete_cookie(key="refresh_token", httponly=True, secure=True, samesite="lax")
+    response.delete_cookie(key="refresh_token", httponly=True, secure=settings.ENVIRONMENT == "production", samesite="lax")
     return {"message": "Successfully logged out"}
 
 @router.get("/me", response_model=UserResponse)

@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # CORS
     FRONTEND_URL: str = "http://localhost:5173"
 
+    ENVIRONMENT: str = "development"
+
     OPENAI_API_KEY: str | None = None
     NVIDIA_API_KEY: str | None = None
 

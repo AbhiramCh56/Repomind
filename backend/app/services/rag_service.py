@@ -3,7 +3,6 @@ from typing import List, Dict
 import chromadb
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-from langchain_community.embeddings.sentence_transformer import SentenceTransformerEmbeddings
 from app.services.embedding_service import CHROMA_STORAGE_DIR
 from app.core.config import settings
 

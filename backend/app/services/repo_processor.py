@@ -165,7 +165,8 @@ def process_repository_files(repo_id: str, db: Session):
                         name=block["name"],
                         content=block["content"],
                         start_line=block["start_line"],
-                        end_line=block["end_line"]
+                        end_line=block["end_line"],
+                        metadata_json=block.get("metadata_json")
                     )
                     chunks_to_insert.append(new_chunk)
                         
