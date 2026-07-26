@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 import chromadb
 from chromadb.config import Settings
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.embeddings.sentence_transformer import SentenceTransformerEmbeddings
 from app.models.chunk import Chunk
 from app.models.file import File
 from app.models.repository import Repository
