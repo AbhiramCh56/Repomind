@@ -85,7 +85,8 @@ export default function ChatInterface({
             </div>
           ))
         )}
-        {isChatLoading && (
+        {isChatLoading &&
+          chatHistory[chatHistory.length - 1]?.role !== "assistant" && (
           <div className="flex justify-start">
             <div className="bg-white border border-gray-100 text-gray-500 rounded-2xl rounded-bl-none px-5 py-3.5 shadow-sm text-sm flex items-center gap-2">
               <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"></div>
