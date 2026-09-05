@@ -18,12 +18,51 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState<
     { role: string; text: string }[]
   >([]);
+  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
     if (token) handleFetchProfile();
   }, []);
+
+  // Load persisted chat history for the selected repository
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!selectedRepoId) {
+        setChatHistory([]);
+        setCurrentSessionId(null);
+        return;
+      }
+      try {
+        const sessionsRes = await api.get(`/chat/sessions/${selectedRepoId}`);
+        if (cancelled) return;
+        const sessions = sessionsRes.data as { id: number }[];
+        if (sessions.length === 0) {
+          setCurrentSessionId(null);
+          setChatHistory([]);
+          return;
+        }
+        const sessionId = sessions[0].id; // most recent session
+        const msgsRes = await api.get(`/chat/sessions/${sessionId}/messages`);
+        if (cancelled) return;
+        setCurrentSessionId(sessionId);
+        setChatHistory(
+          msgsRes.data.map((m: any) => ({
+            role: m.role === "human" ? "user" : "assistant",
+            text: m.content,
+          })),
+        );
+      } catch (err: any) {
+        console.error("Failed to load chat history", err);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRepoId]);
 
   useEffect(() => {
     const isProcessing = repositories.some(
@@ -72,6 +111,7 @@ export default function App() {
       setUserProfile(null);
       setRepositories([]);
       setChatHistory([]);
+      setCurrentSessionId(null);
       setSelectedRepoId("");
     }
   };
@@ -141,27 +181,66 @@ export default function App() {
     const currentInput = chatInput;
     const newHistory = [...chatHistory, { role: "user", text: currentInput }];
 
-    setChatHistory(newHistory);
+    setChatHistory([...newHistory, { role: "assistant", text: "" }]);
     setChatInput("");
     setIsChatLoading(true);
 
-    try {
-      const res = await api.post("/chat/", {
-        repository_id: selectedRepoId,
-        question: currentInput,
+    const applyAssistantText = (text: string) => {
+      setChatHistory((prev) => {
+        if (!prev.length || prev[prev.length - 1].role !== "assistant") return prev;
+        const copy = prev.slice();
+        copy[copy.length - 1] = { role: "assistant", text };
+        return copy;
       });
-      setChatHistory([
-        ...newHistory,
-        { role: "assistant", text: res.data.answer },
-      ]);
-    } catch (err: any) {
-      setChatHistory([
-        ...newHistory,
-        {
-          role: "assistant",
-          text: `Error: ${err.response?.data?.detail || err.message}`,
+    };
+
+    try {
+      const token = localStorage.getItem("access_token");
+      const resp = await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/v1/chat/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
-      ]);
+        body: JSON.stringify({
+          repo_id: selectedRepoId,
+          session_id: currentSessionId,
+          message: currentInput,
+        }),
+      });
+
+      if (!resp.ok || !resp.body) {
+        const errBody = await resp.json().catch(() => null);
+        throw new Error(errBody?.detail || resp.statusText);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf("\n\n")) >= 0) {
+          const rawEvent = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+
+          for (const line of rawEvent.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const data = JSON.parse(line.slice(6));
+            if (data.error) throw new Error(data.error);
+            if (data.text) applyAssistantText(data.text);
+            if (data.session_id) setCurrentSessionId(data.session_id);
+          }
+        }
+      }
+    } catch (err: any) {
+      applyAssistantText(
+        `Error: ${err.response?.data?.detail || err.message}`,
+      );
     } finally {
       setIsChatLoading(false);
     }

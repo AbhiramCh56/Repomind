@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 sqlalchemy
+alembic
 psycopg2-binary
 pydantic
 pydantic-settings
@@ -16,6 +17,7 @@ pathspec
 chromadb
 langchain
 langchain-community
+langchain-chroma
 sentence-transformers
 langchain-openai
 langchain-nvidia-ai-endpoints
