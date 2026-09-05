@@ -19,4 +19,5 @@ langchain-community
 sentence-transformers
 langchain-openai
 langchain-nvidia-ai-endpoints
+langchain-groq
 langchain-huggingface

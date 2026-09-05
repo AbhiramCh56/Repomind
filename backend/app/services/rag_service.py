@@ -3,6 +3,7 @@ from typing import List, Dict
 import chromadb
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langchain_groq import ChatGroq
 from app.services.embedding_service import CHROMA_STORAGE_DIR
 from app.core.config import settings
 
@@ -12,14 +13,34 @@ embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 # 2. Connect to our local ChromaDB
 chroma_client = chromadb.PersistentClient(path=CHROMA_STORAGE_DIR)
 
-# 3. Initialize the LLM (OpenAI by default)
-# You could easily swap this for `from langchain_community.llms import Ollama` 
-# and use `llm = Ollama(model="llama3")` if you are running Ollama locally.
-llm = ChatNVIDIA(
-    model="deepseek-ai/deepseek-v4-flash", 
-    temperature=0.2, # Low temperature because we want factual code answers, not creative writing
-    api_key=settings.NVIDIA_API_KEY 
-)
+# 3. Initialize the LLM provider (configurable via LLM_PROVIDER / .env)
+def _init_llm():
+    provider = settings.LLM_PROVIDER.lower()
+
+    if provider == "groq":
+        if not settings.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY is not set in the environment.")
+        return ChatGroq(
+            model="openai/gpt-oss-20b",
+            temperature=0.2, # Low temperature because we want factual code answers, not creative writing
+            api_key=settings.GROQ_API_KEY
+        )
+
+    if provider == "nvidia":
+        if not settings.NVIDIA_API_KEY:
+            raise ValueError("NVIDIA_API_KEY is not set in the environment.")
+        return ChatNVIDIA(
+            model="nvidia/nemotron-3.5-lightning-30b-a3b",
+            temperature=0.2, # Low temperature because we want factual code answers, not creative writing
+            api_key=settings.NVIDIA_API_KEY
+        )
+
+    raise ValueError(f"Unsupported LLM_PROVIDER '{provider}'. Use 'nvidia' or 'groq'.")
+
+# Initialize the LLM once at import time
+llm = _init_llm()
+
+
 
 def query_repository(repo_id: str, question: str) -> str:
     """
