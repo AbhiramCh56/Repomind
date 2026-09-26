@@ -1,96 +1,183 @@
-import os
-from sqlalchemy.orm import Session
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
 import chromadb
-from chromadb.config import Settings
 from langchain_huggingface import HuggingFaceEmbeddings
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
 from app.models.chunk import Chunk
 from app.models.file import File
 from app.models.repository import Repository
 
-# We store the vector database locally on the server disk
-CHROMA_STORAGE_DIR = os.getenv("CHROMA_STORAGE_DIR", "/tmp/repomind_chroma")
-os.makedirs(CHROMA_STORAGE_DIR, exist_ok=True)
+logger = logging.getLogger(__name__)
 
-# Initialize ChromaDB in persistent mode
-chroma_client = chromadb.PersistentClient(path=CHROMA_STORAGE_DIR)
+_embedding_function = None
+_chroma_client = None
 
-# Load the open-source HuggingFace embedding model locally (Runs on CPU, free)
-# This converts code/text into 384-dimensional vectors
-embedding_function = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-def embed_repository_chunks(repo_id: str, db: Session):
+def get_embedding_function() -> HuggingFaceEmbeddings:
+    """Lazily build the shared embedding model (~90MB, slow to load)."""
+    global _embedding_function
+    if _embedding_function is None:
+        logger.info("Loading embedding model %s", settings.EMBEDDING_MODEL)
+        _embedding_function = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL)
+    return _embedding_function
+
+
+def get_chroma_client() -> chromadb.ClientAPI:
+    """Lazily build the shared persistent Chroma client."""
+    global _chroma_client
+    if _chroma_client is None:
+        Path(settings.CHROMA_STORAGE_DIR).mkdir(parents=True, exist_ok=True)
+        _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_STORAGE_DIR)
+    return _chroma_client
+
+
+def get_collection_name(repo_id: str) -> str:
+    """Canonical Chroma collection name for a repository."""
+    return f"repo_{str(repo_id).replace('-', '')}"
+
+
+def warm_embedding_model_in_background() -> threading.Thread:
     """
-    Fetches all parsed chunks for a repository from PostgreSQL,
-    generates embeddings, and stores them in ChromaDB.
+    Start loading the embedding model on a background thread.
+
+    Loading costs several seconds, so doing it inline in the startup handler
+    would delay the server becoming ready, while doing it lazily would make the
+    user's first question wait. Warming in the background overlaps the load with
+    login and page load instead, and a failure here is harmless because
+    get_embedding_function() simply retries on first use.
+    """
+    def _load() -> None:
+        started = time.perf_counter()
+        try:
+            get_embedding_function()
+            logger.info(
+                "Embedding model ready in %.1fs", time.perf_counter() - started
+            )
+        except Exception:
+            logger.exception(
+                "Embedding model warm-up failed; it will be retried on first use"
+            )
+
+    thread = threading.Thread(target=_load, name="embedding-warmup", daemon=True)
+    thread.start()
+    return thread
+
+
+def delete_repository_collection(repo_id: str) -> bool:
+    """Drop a repository's vector collection. Returns True if one was removed."""
+    collection_name = get_collection_name(repo_id)
+    try:
+        get_chroma_client().delete_collection(name=collection_name)
+    except Exception:
+        logger.debug("Collection %s not present; nothing to delete", collection_name)
+        return False
+    logger.info("Deleted Chroma collection %s", collection_name)
+    return True
+
+
+@dataclass
+class EmbeddingResult:
+    total: int
+    embedded: int
+    errors: list = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return self.embedded == self.total
+
+    def summary(self) -> str:
+        text = f"Embedded {self.embedded}/{self.total} chunks"
+        if self.errors:
+            text += f"; {len(self.errors)} batch(es) failed"
+        return text
+
+
+def embed_repository_chunks(repo_id: str, db: Session) -> EmbeddingResult:
+    """
+    Embeds every chunk of a repository into its own Chroma collection.
+
+    The collection is deleted first so a reprocess never merges with (or
+    duplicates) a previous index. Raises ValueError when there is nothing
+    legitimate to embed; partial failures are reported in the result so the
+    caller can fail the repository instead of silently marking it complete.
     """
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
-        print(f"Repository {repo_id} not found for embedding.")
-        return
+        raise ValueError(f"Repository {repo_id} not found for embedding.")
 
-    print(f"Starting embedding process for {repo.full_name}...")
+    chunks_with_files = (
+        db.query(Chunk, File)
+        .join(File, Chunk.file_id == File.id)
+        .filter(File.repository_id == repo_id)
+        .all()
+    )
+    total = len(chunks_with_files)
+    if total == 0:
+        raise ValueError(f"No chunks found for {repo.full_name}; nothing to embed.")
 
-    # We join File and Chunk tables to get the file path for metadata
-    chunks_with_files = db.query(Chunk, File).join(File, Chunk.file_id == File.id)\
-                          .filter(File.repository_id == repo_id).all()
+    delete_repository_collection(repo_id)
 
-    if not chunks_with_files:
-        print(f"No chunks found for {repo.full_name}. Skipping embedding.")
-        return
+    collection_name = get_collection_name(repo_id)
+    collection = get_chroma_client().get_or_create_collection(
+        name=collection_name,
+        metadata={"description": f"Embeddings for {repo.full_name}"},
+    )
 
-    # We create a unique collection for this repository. 
-    # This acts as a hard boundary, ensuring we don't accidentally query code from another repo.
-    collection_name = f"repo_{repo_id.replace('-', '')}"
-    
-    # Get or create the collection
-    try:
-        collection = chroma_client.get_or_create_collection(
-            name=collection_name,
-            metadata={"description": f"Embeddings for {repo.full_name}"}
-        )
-    except Exception as e:
-        print(f"Error creating ChromaDB collection: {e}")
-        return
+    embedding_function = get_embedding_function()
 
-    # ChromaDB performs best when we insert in batches (e.g., 100 at a time)
     documents = []
     metadatas = []
     ids = []
-
     for chunk, file in chunks_with_files:
-        # We enrich the code chunk with its file path so the LLM knows WHERE the code lives
-        content_to_embed = f"File: {file.file_path}\nCode:\n{chunk.content}"
-        
-        documents.append(content_to_embed)
+        # The file path is part of the embedded text so the LLM knows where the code lives
+        documents.append(f"File: {file.file_path}\nCode:\n{chunk.content}")
         ids.append(str(chunk.id))
-        
-        # This metadata allows us to perform precise filtering later
-        # e.g., "Only search inside 'function' chunks in 'backend/main.py'"
-        metadatas.append({
-            "file_path": file.file_path,
-            "language": file.language,
-            "chunk_type": chunk.chunk_type,
-            "name": chunk.name or "unknown",
-            "start_line": chunk.start_line or 0
-        })
+        metadatas.append(
+            {
+                "file_path": file.file_path,
+                "language": file.language,
+                "chunk_type": chunk.chunk_type,
+                "name": chunk.name or "unknown",
+                "start_line": chunk.start_line or 0,
+            }
+        )
 
-    # Insert in batches of 100 to avoid memory spikes
-    batch_size = 100
-    for i in range(0, len(documents), batch_size):
-        try:
-            # We must use the LangChain embedding function to convert text to vectors manually
-            # because we are interacting with the Chroma client directly here.
-            batch_docs = documents[i:i+batch_size]
-            batch_embeddings = embedding_function.embed_documents(batch_docs)
-            
-            collection.add(
-                documents=batch_docs,
-                embeddings=batch_embeddings,
-                metadatas=metadatas[i:i+batch_size],
-                ids=ids[i:i+batch_size]
-            )
-            print(f"Embedded batch {i//batch_size + 1}/{(len(documents)//batch_size) + 1}...")
-        except Exception as e:
-            print(f"Error embedding batch: {e}")
+    batch_size = max(1, settings.EMBEDDING_BATCH_SIZE)
+    total_batches = (total + batch_size - 1) // batch_size
+    embedded = 0
+    errors: list = []
 
-    print(f"Successfully embedded {len(documents)} chunks for {repo.full_name} into ChromaDB!")
+    for index in range(0, total, batch_size):
+        batch_docs = documents[index : index + batch_size]
+        batch_number = index // batch_size + 1
+        for attempt in (1, 2):
+            try:
+                batch_embeddings = embedding_function.embed_documents(batch_docs)
+                collection.add(
+                    documents=batch_docs,
+                    embeddings=batch_embeddings,
+                    metadatas=metadatas[index : index + batch_size],
+                    ids=ids[index : index + batch_size],
+                )
+            except Exception as exc:
+                if attempt == 1:
+                    logger.warning(
+                        "Batch %s/%s failed, retrying: %s", batch_number, total_batches, exc
+                    )
+                    continue
+                logger.error(
+                    "Batch %s/%s failed permanently: %s", batch_number, total_batches, exc
+                )
+                errors.append(f"batch {batch_number}/{total_batches}: {exc}")
+                break
+            embedded += len(batch_docs)
+            logger.info("Embedded batch %s/%s", batch_number, total_batches)
+            break
+
+    return EmbeddingResult(total=total, embedded=embedded, errors=errors)

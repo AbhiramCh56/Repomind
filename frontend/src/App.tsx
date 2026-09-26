@@ -4,6 +4,15 @@ import AuthView from "./components/AuthView";
 import Sidebar from "./components/Sidebar";
 import ChatInterface from "./components/ChatInterface";
 
+// Every status that means the backend is still working on the repository.
+// Polling must cover all of them, otherwise the UI freezes mid-import.
+const IN_PROGRESS_STATUSES = [
+  "pending",
+  "cloning",
+  "processing",
+  "embedding",
+];
+
 export default function App() {
   const [email, setEmail] = useState("test@example.com");
   const [password, setPassword] = useState("password123");
@@ -65,8 +74,8 @@ export default function App() {
   }, [selectedRepoId]);
 
   useEffect(() => {
-    const isProcessing = repositories.some(
-      (repo) => repo.status === "pending" || repo.status === "cloning",
+    const isProcessing = repositories.some((repo: any) =>
+      IN_PROGRESS_STATUSES.includes(repo.status),
     );
     let intervalId: any;
     if (isProcessing && userProfile) {

@@ -1,16 +1,24 @@
-import os
+import logging
+import shutil
+import traceback
+from pathlib import Path
+from urllib.parse import urlparse
+
 import git
 from sqlalchemy.orm import Session
+
+from app.core.config import settings
 from app.models.repository import Repository, RepoStatus
-from urllib.parse import urlparse
-import shutil
-
-# IMPORT THE NEW EMBEDDING SERVICE
+from app.services.embedding_service import (
+    delete_repository_collection,
+    embed_repository_chunks,
+)
 from app.services.repo_processor import process_repository_files
-from app.services.embedding_service import embed_repository_chunks
 
-# Where we will store cloned repos on the server
-REPO_STORAGE_DIR = os.getenv("REPO_STORAGE_DIR", "/tmp/repomind_repos")
+logger = logging.getLogger(__name__)
+
+MAX_ERROR_MESSAGE_CHARS = 2000
+
 
 def extract_repo_info(github_url: str):
     """Extracts 'tiangolo' and 'fastapi' from 'https://github.com/tiangolo/fastapi'"""
@@ -23,57 +31,106 @@ def extract_repo_info(github_url: str):
         return owner, name
     raise ValueError("Invalid GitHub URL format")
 
+
+def cleanup_repository_artifacts(repo: Repository) -> None:
+    """
+    Remove the vector index and the on-disk checkout for a repository.
+
+    Without this, deleting a repository orphaned both its Chroma collection and
+    its cloned directory, permanently leaking disk space and vectors.
+    """
+    try:
+        delete_repository_collection(str(repo.id))
+    except Exception:
+        logger.warning("Could not delete vector index for %s", repo.full_name, exc_info=True)
+
+    if repo.local_path:
+        local_path = Path(repo.local_path)
+        if local_path.exists():
+            shutil.rmtree(local_path, ignore_errors=True)
+            logger.info("Removed checkout %s", local_path)
+
+
 def process_repository_background_task(repo_id: str, db: Session):
     """
-    This runs in the background. It clones the repo and updates the DB status.
+    Clones the repo, indexes it, and records honest progress/failure state.
     """
     repo = db.query(Repository).filter(Repository.id == repo_id).first()
     if not repo:
+        logger.warning("Background task for unknown repository %s", repo_id)
         return
 
+    full_name = repo.full_name
+
     try:
-        # 1. Update status to CLONING
         repo.status = RepoStatus.CLONING
+        repo.error_message = None
+        repo.chunk_count = 0
+        repo.embedded_count = 0
         db.commit()
 
-        # 2. Prepare local storage path
-        os.makedirs(REPO_STORAGE_DIR, exist_ok=True)
-        local_path = os.path.join(REPO_STORAGE_DIR, str(repo.id))
-        
-        # Clean up if it exists from a previous failed run
-        if os.path.exists(local_path):
-            shutil.rmtree(local_path)
+        # 1. Prepare local storage path
+        local_path = Path(settings.REPO_STORAGE_DIR) / str(repo.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if local_path.exists():
+            shutil.rmtree(local_path, ignore_errors=True)
 
-        # 3. Clone the repository
-        # Depth=1 does a "shallow clone", grabbing only the latest commit. 
-        # This is MUCH faster and saves disk space since we just want to read the code.
-        print(f"Starting clone for {repo.github_url} into {local_path}...")
-        cloned_repo = git.Repo.clone_from(repo.github_url, local_path, depth=1)
-        
-        # 4. Extract metadata (like the default branch name)
-        default_branch = cloned_repo.active_branch.name
+        # 2. Clone the repository. depth=1 is a shallow clone: we only ever
+        #    need the latest snapshot of the code.
+        logger.info("Cloning %s into %s", repo.github_url, local_path)
+        cloned_repo = git.Repo.clone_from(repo.github_url, str(local_path), depth=1)
 
-        # 5. Update DB on clone success
-        repo.local_path = local_path
+        # 3. Extract metadata (an empty repository has no active branch)
+        try:
+            default_branch = cloned_repo.active_branch.name
+        except TypeError:
+            default_branch = None
+
+        repo.local_path = str(local_path)
         repo.default_branch = default_branch
-        
-        # 6. Process the files and chunk them (AST Parsing)
-        print(f"Starting file processing for {repo.full_name}...")
-        process_repository_files(str(repo.id), db)
-        
-        # 7. --- NEW: Generate Embeddings and store in ChromaDB ---
-        print(f"Starting embedding generation for {repo.full_name}...")
-        embed_repository_chunks(str(repo.id), db)
-        
-        # 8. Now we are truly done
+        db.commit()
+
+        # 4. Parse and chunk the files
+        repo.status = RepoStatus.PROCESSING
+        db.commit()
+        file_result = process_repository_files(str(repo.id), db)
+        if file_result.chunks == 0:
+            raise ValueError(
+                f"No indexable code found in {full_name} "
+                f"({file_result.files} files kept, {len(file_result.errors)} skipped)."
+            )
+
+        # 5. Generate embeddings
+        repo.status = RepoStatus.EMBEDDING
+        db.commit()
+        embedding_result = embed_repository_chunks(str(repo.id), db)
+        if not embedding_result.complete:
+            raise RuntimeError(
+                f"Indexing incomplete: {embedding_result.summary()}. "
+                f"First failure: {embedding_result.errors[0]}"
+            )
+
+        # 6. Only now is the repository genuinely ready
+        repo.embedded_count = embedding_result.embedded
         repo.status = RepoStatus.COMPLETED
         db.commit()
-        print(f"Successfully processed and embedded {repo.full_name}")
+        logger.info(
+            "Indexed %s: %d/%d chunks embedded",
+            full_name,
+            embedding_result.embedded,
+            embedding_result.total,
+        )
 
-    except Exception as e:
-        # Update DB on failure
+    except Exception:
+        logger.exception("Failed to process repository %s", repo_id)
         db.rollback()
-        repo.status = RepoStatus.FAILED
-        repo.error_message = str(e)
-        db.commit()
-        print(f"Failed to clone {repo.full_name}: {str(e)}")
+
+        # Drop any half-built vector index so it can never be queried
+        delete_repository_collection(repo_id)
+
+        failed_repo = db.query(Repository).filter(Repository.id == repo_id).first()
+        if failed_repo:
+            failed_repo.status = RepoStatus.FAILED
+            failed_repo.error_message = traceback.format_exc()[-MAX_ERROR_MESSAGE_CHARS:]
+            failed_repo.embedded_count = 0
+            db.commit()
