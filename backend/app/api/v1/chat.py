@@ -1,7 +1,7 @@
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
-from app.models.repository import Repository
+from app.models.repository import Repository, RepoStatus
 from app.models.chat import ChatMessage, ChatSession
 from app.schemas.chat import (
     ChatMessageResponse,
@@ -23,14 +23,17 @@ import json
 router = APIRouter()
 
 
-def _resolve_or_create_session(
+def _get_ready_repository(
     payload: ChatRequest,
     db: Session,
     current_user: User,
-    message: str,
-) -> int:
-  """Validate repo ownership and return the session id to append to."""
-  # The repo must exist and belong to the current user
+) -> Repository:
+  """
+  Validate ownership *and* that the repository is genuinely queryable.
+
+  Refusing early keeps an unindexed repository from reaching the LLM and turns
+  what used to surface as a 500 into an explicit 4xx.
+  """
   repo = db.query(Repository).filter(
       Repository.id == payload.repo_id,
       Repository.owner_id == current_user.id,
@@ -38,10 +41,35 @@ def _resolve_or_create_session(
   if not repo:
     raise HTTPException(status_code=404, detail="Repository not found or access denied")
 
-  # Get or create session
+  if repo.status != RepoStatus.COMPLETED:
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"This repository is '{repo.status.value}' and cannot be queried yet. "
+            "Wait for indexing to finish."
+        ),
+    )
+
+  if not repo.has_embeddings:
+    raise HTTPException(
+        status_code=409,
+        detail="This repository has no usable index. Please re-import it.",
+    )
+
+  return repo
+
+
+def _resolve_or_create_session(
+    repo: Repository,
+    payload: ChatRequest,
+    db: Session,
+    current_user: User,
+    message: str,
+) -> int:
+  """Return the session id to append to, creating one when needed."""
   if not payload.session_id:
     session = ChatSession(
-        repo_id=payload.repo_id,
+        repo_id=repo.id,
         user_id=current_user.id,
         title=message[:30] + "...",
     )
@@ -53,6 +81,7 @@ def _resolve_or_create_session(
     existing = db.query(ChatSession).filter(
         ChatSession.id == payload.session_id,
         ChatSession.user_id == current_user.id,
+        ChatSession.repo_id == repo.id,
     ).first()
     if not existing:
       raise HTTPException(status_code=404, detail="Chat session not found")
@@ -65,15 +94,22 @@ def chat_with_repo(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-  session_id = _resolve_or_create_session(payload, db, current_user, payload.message)
+  repo = _get_ready_repository(payload, db, current_user)
+  session_id = _resolve_or_create_session(repo, payload, db, current_user, payload.message)
+
+  # Build the retriever before writing anything, so a failure never leaves an
+  # orphaned user message in the transcript.
+  try:
+    retriever = get_retriever(payload.repo_id)
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e))
+  llm = get_llm()
 
   # 1. Persist User Message
   db.add(ChatMessage(session_id=session_id, role="human", content=payload.message))
   db.commit()
 
   # 2. Query RAG pipeline with chat history
-  retriever = get_retriever(payload.repo_id)
-  llm = get_llm()
   ai_response = ask_codebase_with_history(
       db=db,
       session_id=session_id,
@@ -98,19 +134,22 @@ def chat_with_repo_stream(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-  session_id = _resolve_or_create_session(payload, db, current_user, payload.message)
+  repo = _get_ready_repository(payload, db, current_user)
+  session_id = _resolve_or_create_session(repo, payload, db, current_user, payload.message)
 
-  # 1. Persist User Message
-  db.add(ChatMessage(session_id=session_id, role="human", content=payload.message))
-  db.commit()
-
-  # 2. Query RAG pipeline with chat history, streaming the answer
+  # Build the retriever before writing anything, so a failure never leaves an
+  # orphaned user message in the transcript.
   try:
     retriever = get_retriever(payload.repo_id)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e))
   llm = get_llm()
 
+  # 1. Persist User Message
+  db.add(ChatMessage(session_id=session_id, role="human", content=payload.message))
+  db.commit()
+
+  # 2. Query RAG pipeline with chat history, streaming the answer
   def event_generator():
     try:
       # 3. Stream the AI response token by token

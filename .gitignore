@@ -9,3 +9,5 @@ backend/.env
 .opencode
 AGENTS.md
 graphify-out
+INTERVIEW_PREP.md
+backend/.data

@@ -1,3 +1,41 @@
+// Human-readable label for each in-flight pipeline stage reported by the API.
+const STAGE_LABELS: Record<string, string> = {
+  pending: "Queued",
+  cloning: "Cloning",
+  processing: "Parsing code",
+  embedding: "Building index",
+};
+
+const BADGE_BASE =
+  "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium";
+
+function StatusBadge({ repo }: { repo: any }) {
+  if (repo.status === "failed") {
+    return (
+      <span className={`${BADGE_BASE} bg-red-900 text-red-300`}>Failed</span>
+    );
+  }
+  if (repo.status === "completed") {
+    return repo.has_embeddings ? (
+      <span className={`${BADGE_BASE} bg-green-900 text-green-300`}>
+        Ready
+      </span>
+    ) : (
+      <span className={`${BADGE_BASE} bg-red-900 text-red-300`}>
+        Needs Re-import
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`${BADGE_BASE} bg-yellow-900 text-yellow-300 animate-pulse`}
+      title={repo.error_message || undefined}
+    >
+      {STAGE_LABELS[repo.status] ?? "Processing..."}
+    </span>
+  );
+}
+
 export default function Sidebar({
   userProfile,
   repositories,
@@ -62,23 +100,7 @@ export default function Sidebar({
                 </div>
 
                 <div className="mt-2 flex items-center justify-between">
-                  {repo.status === "completed" && repo.has_embeddings ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-900 text-green-300">
-                      Ready
-                    </span>
-                  ) : repo.status === "completed" && !repo.has_embeddings ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-900 text-red-300">
-                      Needs Re-import
-                    </span>
-                  ) : repo.status === "failed" ? (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-900 text-red-300">
-                      Failed
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-900 text-yellow-300 animate-pulse">
-                      Processing...
-                    </span>
-                  )}
+                  <StatusBadge repo={repo} />
 
                   <div className="flex gap-2">
                     {(!repo.has_embeddings || repo.status === "failed") && (
