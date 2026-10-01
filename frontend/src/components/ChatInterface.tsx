@@ -18,7 +18,7 @@ export default function ChatInterface({
   }, [chatHistory, isChatLoading]);
 
   const activeRepos = repositories.filter(
-    (r: any) => r.status === "completed" && r.has_embeddings,
+    (r: any) => r.status === "completed" && r.is_queryable,
   );
 
   return (

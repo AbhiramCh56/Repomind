@@ -50,7 +50,7 @@ def _get_ready_repository(
         ),
     )
 
-  if not repo.has_embeddings:
+  if not repo.is_queryable:
     raise HTTPException(
         status_code=409,
         detail="This repository has no usable index. Please re-import it.",
@@ -116,6 +116,7 @@ def chat_with_repo(
       question=payload.message,
       retriever=retriever,
       llm=llm,
+      repo_id=payload.repo_id,
   )
 
   # 3. Persist AI Response
@@ -159,6 +160,7 @@ def chat_with_repo_stream(
           question=payload.message,
           retriever=retriever,
           llm=llm,
+          repo_id=payload.repo_id,
       ):
         yield f"data: {json.dumps({'text': text})}\n\n"
       # 4. Signal completion (AI response already persisted inside the stream)

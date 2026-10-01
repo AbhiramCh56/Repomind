@@ -15,6 +15,11 @@ class File(Base):
     extension = Column(String, nullable=True)              # e.g., ".py"
     language = Column(String, nullable=True)               # e.g., "Python"
     size_bytes = Column(Integer, nullable=False)
+
+    # How this file was understood: "structural" when a grammar extracted real
+    # symbols, otherwise one of the raw_* states. A null value predates this
+    # column and is treated as unknown rather than as a successful parse.
+    parse_state = Column(String, nullable=True, index=True)
     
     # We will use this later for deduplication and update tracking
     checksum = Column(String, nullable=True) 

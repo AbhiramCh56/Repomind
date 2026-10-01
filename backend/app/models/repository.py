@@ -44,6 +44,11 @@ class Repository(Base):
 
     files = relationship("File", back_populates="repository", cascade="all, delete-orphan")
 
+    # Deterministic architecture summary; at most one row per repository.
+    manifest = relationship(
+        "RepoManifest", back_populates="repository", cascade="all, delete-orphan", uselist=False
+    )
+
     @property
     def has_embeddings(self) -> bool:
         """True only when indexing finished and every chunk made it into Chroma."""
@@ -52,3 +57,34 @@ class Repository(Base):
             and (self.embedded_count or 0) > 0
             and self.embedded_count == self.chunk_count
         )
+
+    @property
+    def is_manifest_only(self) -> bool:
+        """
+        True when the repository has no embedded chunks but a stored manifest.
+
+        Docs and config files are represented in the manifest instead of being
+        embedded, so a repository made entirely of documentation legitimately
+        produces zero chunks. Its manifest is still a complete architecture
+        summary, so it must be queryable rather than rejected as unindexed.
+        """
+        return (
+            self.status == RepoStatus.COMPLETED
+            and (self.chunk_count or 0) == 0
+            and self.manifest is not None
+        )
+
+    @property
+    def is_queryable(self) -> bool:
+        """True when there is enough indexed state to answer a question."""
+        return self.has_embeddings or self.is_manifest_only
+
+    @property
+    def is_complete(self) -> bool:
+        """
+        True once indexing finished, regardless of whether anything was embedded.
+
+        The manifest can be built from ``File`` rows for any completed
+        repository, including a docs-only one that never produced chunks.
+        """
+        return self.status == RepoStatus.COMPLETED

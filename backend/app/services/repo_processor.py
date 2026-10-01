@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.models.repository import Repository
 from app.models.file import File
 from app.models.chunk import Chunk
-from app.services.parser import PythonCodeParser
+from app.services import file_filter, languages
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +56,30 @@ class FileProcessResult:
     files: int = 0
     chunks: int = 0
     errors: list = field(default_factory=list)
+    skipped: dict = field(default_factory=dict)
+    parse_states: dict = field(default_factory=dict)
+    languages: dict = field(default_factory=dict)
+    # Files whose representation lives only in the manifest, with no embedded chunks.
+    manifest_only_files: int = 0
+
+    def record_skip(self, reason: str) -> None:
+        self.skipped[reason] = self.skipped.get(reason, 0) + 1
+
+    def record_parse_state(self, state: str) -> None:
+        self.parse_states[state] = self.parse_states.get(state, 0) + 1
+
+    def record_language(self, language: str) -> None:
+        self.languages[language] = self.languages.get(language, 0) + 1
 
     def summary(self) -> str:
         text = f"Indexed {self.files} files into {self.chunks} chunks"
         if self.errors:
             text += f"; {len(self.errors)} file(s) skipped"
+        if self.skipped:
+            skipped = ", ".join(
+                f"{count} {reason}" for reason, count in sorted(self.skipped.items())
+            )
+            text += f"; filtered out {skipped}"
         return text
 
 
@@ -158,48 +177,80 @@ def process_repository_files(repo_id: str, db: Session) -> FileProcessResult:
         dirs[:] = [
             d for d in dirs
             if not spec.match_file(f"{(posix_root / d).as_posix()}/")
+            and d.lower() not in file_filter.BUILD_DIRS
         ]
 
         for filename in files:
             rel_file_path = (posix_root / filename).as_posix()
-
-            # Skip ignored files
-            if spec.match_file(rel_file_path):
-                continue
-
             full_path = os.path.join(root, filename)
 
             try:
-                # Only ingest relatively small text files, skip massive binaries
                 size = os.path.getsize(full_path)
-                if size > settings.MAX_FILE_SIZE_BYTES:
-                    logger.debug("Skipping oversized file %s (%s bytes)", rel_file_path, size)
+            except OSError as exc:
+                result.errors.append(f"{rel_file_path}: {exc}")
+                continue
+
+            reason = file_filter.skip_reason(
+                rel_file_path,
+                size,
+                gitignore_spec=spec,
+                max_file_size_bytes=settings.MAX_FILE_SIZE_BYTES,
+            )
+            if reason is not None:
+                result.record_skip(reason)
+                continue
+
+            _, ext = os.path.splitext(filename)
+            extension = ext.lower()
+
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                    source_code = f.read()
+
+                if file_filter.looks_generated_bulk(source_code, size):
+                    result.record_skip(file_filter.SkipReason.GENERATED_BULK)
                     continue
 
-                _, ext = os.path.splitext(filename)
-                language = detect_language(filename)
-
-                # Each file is wrapped in a savepoint so one bad file can never
-                # discard the work already done for the rest of the batch.
                 with db.begin_nested():
+                    parsed = languages.parse_symbols_for_file(
+                        filename, extension, source_code
+                    )
+                    if not parsed.language:
+                        # Payload that survived the extension checks but is not
+                        # text; never index it as if it were code.
+                        result.record_skip(file_filter.SkipReason.BINARY)
+                        continue
+
+                    result.record_parse_state(parsed.state)
+
                     new_file = File(
                         repository_id=repo.id,
                         file_path=rel_file_path,
-                        extension=ext.lower(),
-                        language=language,
+                        extension=extension,
+                        language=parsed.language,
+                        parse_state=parsed.state,
                         size_bytes=size
                     )
                     db.add(new_file)
-                    # Flush assigns the primary key without a round-trip commit
                     db.flush()
+                    result.record_language(parsed.language)
 
-                    with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                        source_code = f.read()
+                    is_structural = parsed.state == languages.PARSE_STATE_STRUCTURAL
 
-                    if language == "Python":
-                        extracted_blocks = PythonCodeParser(source_code).parse()
-                    else:
+                    if parsed.blocks:
+                        extracted_blocks = parsed.blocks
+                    elif is_structural:
+                        # A structural parse that produced no symbols still gets a
+                        # single chunk so the file remains searchable.
                         extracted_blocks = naive_chunker(source_code)
+                    else:
+                        # Docs and config are represented in the manifest instead
+                        # of being embedded one chunk at a time. Emitting raw_text
+                        # for these dominated the index on doc-heavy repositories
+                        # (a single extensionless LICENSE file alone produced 555
+                        # vectors), while contributing nothing to code questions.
+                        extracted_blocks = []
+                        result.manifest_only_files += 1
 
                     chunks_to_insert = [
                         Chunk(
@@ -236,4 +287,16 @@ def process_repository_files(repo_id: str, db: Session) -> FileProcessResult:
     db.commit()
 
     logger.info("%s: %s", repo.full_name, result.summary())
+    if result.parse_states:
+        logger.info(
+            "%s: parse states %s",
+            repo.full_name,
+            ", ".join(f"{k}={v}" for k, v in sorted(result.parse_states.items())),
+        )
+    if result.languages:
+        logger.info(
+            "%s: languages %s",
+            repo.full_name,
+            ", ".join(f"{k}={v}" for k, v in sorted(result.languages.items())),
+        )
     return result

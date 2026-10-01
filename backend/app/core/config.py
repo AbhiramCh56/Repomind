@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     # Storage (defaults live under backend/.data so they are CWD-independent)
     CHROMA_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "chroma")
     REPO_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "repos")
+    # Rendered manifests, written as a convenience alongside the database row.
+    MANIFEST_STORAGE_DIR: str = str(BACKEND_ROOT / ".data" / "manifests")
 
     # Parsing / embedding
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"

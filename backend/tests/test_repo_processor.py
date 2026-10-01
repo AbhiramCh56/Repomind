@@ -73,7 +73,10 @@ class RepoProcessorTest(unittest.TestCase):
         repo, db = self._make_repo(
             {
                 "good.py": "x = 1\n",
-                "broken.md": "BOOM\n",
+                # A structural file with no symbols falls back to naive_chunker,
+                # so this is the file whose chunking we break. It has to be code:
+                # docs and config no longer reach the chunker at all.
+                "broken.py": "BOOM\n",
                 "also_good.py": "y = 2\n",
             }
         )
@@ -90,7 +93,7 @@ class RepoProcessorTest(unittest.TestCase):
 
         self.assertEqual(result.files, 2)
         self.assertEqual(len(result.errors), 1)
-        self.assertIn("broken.md", result.errors[0])
+        self.assertIn("broken.py", result.errors[0])
         self.assertEqual(repo.chunk_count, result.chunks)
 
     def test_oversized_files_are_skipped(self):

@@ -11,3 +11,6 @@ AGENTS.md
 graphify-out
 INTERVIEW_PREP.md
 backend/.data
+
+__pycache__/
+*.py[cod]

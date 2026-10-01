@@ -8,10 +8,7 @@ pydantic-settings
 
 pyjwt
 python-multipart
-pydantic-settings
 bcrypt
-pyjwt
-python-multipart
 GitPython
 pathspec
 chromadb
@@ -23,3 +20,15 @@ langchain-openai
 langchain-nvidia-ai-endpoints
 langchain-groq
 langchain-huggingface
+
+tree-sitter
+tree-sitter-python
+tree-sitter-javascript
+tree-sitter-typescript
+tree-sitter-go
+tree-sitter-rust
+tree-sitter-java
+tree-sitter-c
+tree-sitter-cpp
+tree-sitter-ruby
+tree-sitter-php
