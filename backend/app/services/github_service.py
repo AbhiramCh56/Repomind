@@ -14,6 +14,7 @@ from app.services.embedding_service import (
     embed_repository_chunks,
 )
 from app.services.repo_processor import process_repository_files
+from app.services.manifest_service import build_and_persist_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -94,32 +95,61 @@ def process_repository_background_task(repo_id: str, db: Session):
         repo.status = RepoStatus.PROCESSING
         db.commit()
         file_result = process_repository_files(str(repo.id), db)
-        if file_result.chunks == 0:
+        if file_result.chunks == 0 and file_result.manifest_only_files == 0:
             raise ValueError(
                 f"No indexable code found in {full_name} "
                 f"({file_result.files} files kept, {len(file_result.errors)} skipped)."
             )
 
-        # 5. Generate embeddings
-        repo.status = RepoStatus.EMBEDDING
-        db.commit()
-        embedding_result = embed_repository_chunks(str(repo.id), db)
-        if not embedding_result.complete:
-            raise RuntimeError(
-                f"Indexing incomplete: {embedding_result.summary()}. "
-                f"First failure: {embedding_result.errors[0]}"
+        # 5. Generate embeddings. A docs/config-only repository has no chunks by
+        #    design; its manifest is the whole representation, so there is
+        #    nothing to embed and the embedding step is skipped rather than
+        #    reported as a failure.
+        if file_result.chunks == 0:
+            repo.embedded_count = 0
+            repo.status = RepoStatus.COMPLETED
+            db.commit()
+            logger.info(
+                "%s: no embeddable chunks (%d manifest-only files); "
+                "completing with manifest-only index",
+                full_name,
+                file_result.manifest_only_files,
+            )
+        else:
+            repo.status = RepoStatus.EMBEDDING
+            db.commit()
+            embedding_result = embed_repository_chunks(str(repo.id), db)
+            if not embedding_result.complete:
+                raise RuntimeError(
+                    f"Indexing incomplete: {embedding_result.summary()}. "
+                    f"First failure: {embedding_result.errors[0]}"
+                )
+
+            # 6. Only now is the repository genuinely ready
+            repo.embedded_count = embedding_result.embedded
+            repo.status = RepoStatus.COMPLETED
+            db.commit()
+            logger.info(
+                "Indexed %s: %d/%d chunks embedded",
+                full_name,
+                embedding_result.embedded,
+                embedding_result.total,
             )
 
-        # 6. Only now is the repository genuinely ready
-        repo.embedded_count = embedding_result.embedded
-        repo.status = RepoStatus.COMPLETED
-        db.commit()
-        logger.info(
-            "Indexed %s: %d/%d chunks embedded",
-            full_name,
-            embedding_result.embedded,
-            embedding_result.total,
-        )
+        # 7. Build the deterministic architecture manifest. This reads the rows
+        #    just written, so it needs no extra clone, embedding, or LLM call.
+        #    A failure here must not fail an otherwise successful import.
+        try:
+            manifest_row = build_and_persist_manifest(db, repo)
+            logger.info(
+                "%s: manifest built (%d files, %d symbols)",
+                full_name,
+                manifest_row.file_count,
+                manifest_row.symbol_count,
+            )
+        except Exception:
+            logger.exception("Manifest generation failed for %s", full_name)
+            db.rollback()
 
     except Exception:
         logger.exception("Failed to process repository %s", repo_id)

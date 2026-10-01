@@ -142,7 +142,7 @@ export default function App() {
       setSelectedRepoId((prev) => {
         if (!prev && res.data.length > 0) {
           const firstValid = res.data.find(
-            (r: any) => r.status === "completed" && r.has_embeddings,
+            (r: any) => r.status === "completed" && r.is_queryable,
           );
           return firstValid ? firstValid.id : prev;
         }

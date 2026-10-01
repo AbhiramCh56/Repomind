@@ -12,15 +12,30 @@ const BADGE_BASE =
 function StatusBadge({ repo }: { repo: any }) {
   if (repo.status === "failed") {
     return (
-      <span className={`${BADGE_BASE} bg-red-900 text-red-300`}>Failed</span>
+      <span
+        className={`${BADGE_BASE} bg-red-900 text-red-300`}
+        title={repo.error_message || undefined}
+      >
+        Failed
+      </span>
     );
   }
   if (repo.status === "completed") {
-    return repo.has_embeddings ? (
-      <span className={`${BADGE_BASE} bg-green-900 text-green-300`}>
-        Ready
-      </span>
-    ) : (
+    if (repo.is_queryable) {
+      return (
+        <span
+          className={`${BADGE_BASE} bg-green-900 text-green-300`}
+          title={
+            repo.has_embeddings
+              ? undefined
+              : "No embedded code. Answers come from the repository manifest."
+          }
+        >
+          Ready
+        </span>
+      );
+    }
+    return (
       <span className={`${BADGE_BASE} bg-red-900 text-red-300`}>
         Needs Re-import
       </span>
@@ -29,7 +44,6 @@ function StatusBadge({ repo }: { repo: any }) {
   return (
     <span
       className={`${BADGE_BASE} bg-yellow-900 text-yellow-300 animate-pulse`}
-      title={repo.error_message || undefined}
     >
       {STAGE_LABELS[repo.status] ?? "Processing..."}
     </span>
@@ -103,7 +117,7 @@ export default function Sidebar({
                   <StatusBadge repo={repo} />
 
                   <div className="flex gap-2">
-                    {(!repo.has_embeddings || repo.status === "failed") && (
+                    {(!repo.is_queryable || repo.status === "failed") && (
                       <button
                         onClick={() => handleReprocessRepo(repo.id)}
                         className="text-xs text-blue-400 hover:text-blue-300"

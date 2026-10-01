@@ -25,6 +25,30 @@ class RepositoryResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     has_embeddings: bool = False
+    # True when the repo can answer questions at all: either it has vectors, or
+    # it is a docs/config-only repo represented entirely by its manifest.
+    is_queryable: bool = False
+    languages: dict = {}
+
+    class Config:
+        from_attributes = True
+
+
+class StructureResponse(BaseModel):
+    """
+    Deterministic architecture summary for a repository.
+
+    ``manifest`` carries the full payload (languages, directories, entrypoints,
+    symbol index, doc inventory). ``markdown`` is the rendered view used for
+    display and for architecture-oriented retrieval.
+    """
+
+    repository_id: UUID4
+    full_name: str
+    file_count: int
+    symbol_count: int
+    manifest: dict
+    markdown: str
 
     class Config:
         from_attributes = True
