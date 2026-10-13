@@ -1,0 +1,6 @@
+# Shell hooks must keep LF endings or their shebang breaks after checkout.
+.githooks/* text eol=lf
+*.sh text eol=lf
+
+# CI workflows: LF keeps diffs stable across platforms.
+.github/workflows/*.yml text eol=lf

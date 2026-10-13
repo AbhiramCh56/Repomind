@@ -1,0 +1,38 @@
+#!/bin/sh
+# RepoMind secret guard.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass for a false positive:   git commit --no-verify
+#
+# This hook only sees what this machine commits. It is a backstop, not the
+# primary control: CI (.github/workflows/secret-scan.yml) scans everything on
+# push, including commits made elsewhere or with --no-verify.
+
+# 1) Refuse to commit environment files (even after `git add -f`).
+#    .env.example is documentation and stays allowed.
+staged_env=$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '(^|/)\.env($|\.)' \
+    | grep -v '\.env\.example$' || true)
+if [ -n "$staged_env" ]; then
+    echo "pre-commit: refusing to commit environment file(s):" >&2
+    echo "$staged_env" | sed 's/^/    /' >&2
+    echo "Move them to .env.example with placeholder values." >&2
+    exit 1
+fi
+
+# 2) Scan added lines in the staged diff for secret-shaped values.
+#    Patterns are intentionally specific (length floors, known prefixes) to
+#    keep false positives low.
+patterns='SECRET_KEY[[:space:]]*=[[:space:]]*[A-Za-z0-9]|nvapi-[A-Za-z0-9]|gsk_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+hits=$(git diff --cached --unified=0 --no-color \
+    | grep -E '^\+' \
+    | grep -vE '^\+\+\+' \
+    | grep -nE "$patterns" || true)
+if [ -n "$hits" ]; then
+    echo "pre-commit: possible secret detected in staged changes:" >&2
+    echo "$hits" | sed 's/^/    /' >&2
+    echo "If this is a false positive, re-run with: git commit --no-verify" >&2
+    exit 1
+fi
+
+exit 0

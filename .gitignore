@@ -6,6 +6,8 @@
 .env.*
 *.env
 backend/.env
+# Documentation template, not a real env file.
+!.env.example
 .opencode
 AGENTS.md
 graphify-out
