@@ -22,7 +22,7 @@ export default function ChatInterface({
   );
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-white">
+    <div className="flex-1 flex flex-col min-h-0 bg-white">
       <div className="h-16 border-b border-gray-200 flex items-center px-6 bg-gray-50 flex-shrink-0">
         <label className="text-sm font-medium text-gray-700 mr-3">
           Active Context:

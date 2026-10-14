@@ -3,6 +3,11 @@ import api from "./api/axiosConfig";
 import AuthView from "./components/AuthView";
 import Sidebar from "./components/Sidebar";
 import ChatInterface from "./components/ChatInterface";
+import ArchitectureView from "./components/ArchitectureView";
+
+// Backend origin for the few requests that bypass the axios instance: the SSE
+// chat stream and the public /health probe (which lives outside /api/v1).
+const API_ORIGIN = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // Every status that means the backend is still working on the repository.
 // Polling must cover all of them, otherwise the UI freezes mid-import.
@@ -29,6 +34,22 @@ export default function App() {
   >([]);
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
+
+  const [chatEnabled, setChatEnabled] = useState(true);
+  const [activeView, setActiveView] = useState<"chat" | "architecture">("chat");
+
+  // The public health probe is the cheapest way to learn whether the backend
+  // has chat gated off, so the UI can hide it instead of failing on send.
+  useEffect(() => {
+    fetch(`${API_ORIGIN}/health`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && typeof data.chat_enabled === "boolean") {
+          setChatEnabled(data.chat_enabled);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem("access_token");
@@ -205,7 +226,7 @@ export default function App() {
 
     try {
       const token = localStorage.getItem("access_token");
-      const resp = await fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/v1/chat/stream`, {
+      const resp = await fetch(`${API_ORIGIN}/api/v1/chat/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -255,6 +276,10 @@ export default function App() {
     }
   };
 
+  // Never leave the user stranded on a tab that is switched off server-side:
+  // when chat is gated off, the effective view is always architecture.
+  const view = chatEnabled ? activeView : "architecture";
+
   if (!userProfile) {
     return (
       <>
@@ -283,16 +308,57 @@ export default function App() {
         handleDeleteRepo={handleDeleteRepo}
         handleLogout={handleLogout}
       />
-      <ChatInterface
-        repositories={repositories}
-        selectedRepoId={selectedRepoId}
-        setSelectedRepoId={setSelectedRepoId}
-        chatHistory={chatHistory}
-        chatInput={chatInput}
-        setChatInput={setChatInput}
-        handleAskQuestion={handleAskQuestion}
-        isChatLoading={isChatLoading}
-      />
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="h-12 border-b border-gray-200 bg-white flex items-center gap-2 px-4 flex-shrink-0">
+          <button
+            onClick={() => setActiveView("chat")}
+            disabled={!chatEnabled}
+            title={chatEnabled ? undefined : "Chat is temporarily unavailable."}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              view === "chat"
+                ? "bg-blue-600 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            } ${chatEnabled ? "" : "opacity-50 cursor-not-allowed hover:bg-transparent"}`}
+          >
+            Chat
+          </button>
+          <button
+            onClick={() => setActiveView("architecture")}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              view === "architecture"
+                ? "bg-blue-600 text-white"
+                : "text-gray-600 hover:bg-gray-100"
+            }`}
+          >
+            Architecture
+          </button>
+          {!chatEnabled && (
+            <span className="ml-auto text-xs text-gray-500">
+              Chat is temporarily unavailable.
+            </span>
+          )}
+        </div>
+        <div className="flex-1 min-h-0 flex">
+          {view === "chat" ? (
+            <ChatInterface
+              repositories={repositories}
+              selectedRepoId={selectedRepoId}
+              setSelectedRepoId={setSelectedRepoId}
+              chatHistory={chatHistory}
+              chatInput={chatInput}
+              setChatInput={setChatInput}
+              handleAskQuestion={handleAskQuestion}
+              isChatLoading={isChatLoading}
+            />
+          ) : (
+            <ArchitectureView
+              repositories={repositories}
+              selectedRepoId={selectedRepoId}
+              setSelectedRepoId={setSelectedRepoId}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
