@@ -1,4 +1,4 @@
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_chat_enabled
 from app.db.session import get_db
 from app.models.user import User
 from app.models.repository import Repository, RepoStatus
@@ -93,6 +93,7 @@ def chat_with_repo(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _chat_gate: None = Depends(require_chat_enabled),
 ):
   repo = _get_ready_repository(payload, db, current_user)
   session_id = _resolve_or_create_session(repo, payload, db, current_user, payload.message)
@@ -134,6 +135,7 @@ def chat_with_repo_stream(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    _chat_gate: None = Depends(require_chat_enabled),
 ):
   repo = _get_ready_repository(payload, db, current_user)
   session_id = _resolve_or_create_session(repo, payload, db, current_user, payload.message)

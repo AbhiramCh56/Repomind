@@ -23,6 +23,11 @@ class Settings(BaseSettings):
 
     ENVIRONMENT: str = "development"
 
+    # Feature gate for the LLM chat endpoints. Set CHAT_ENABLED=false in
+    # production to take chat offline (503 on the ask endpoints) without
+    # removing the routes or the chat history. Re-enable once hardened.
+    CHAT_ENABLED: bool = True
+
     # LLM API keys
     OPENAI_API_KEY: str | None = None
     NVIDIA_API_KEY: str | None = None

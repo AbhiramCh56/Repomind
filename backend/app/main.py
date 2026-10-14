@@ -48,4 +48,4 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat & RAG"])
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "chat_enabled": settings.CHAT_ENABLED}

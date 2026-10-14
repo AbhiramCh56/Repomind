@@ -2,12 +2,28 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.db.session import get_db
+from app.core.config import settings
 from app.core.security import decode_token
 from app.models.user import User
 import jwt
 
 # Tells FastAPI to look for the Bearer token in the Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+
+def require_chat_enabled() -> None:
+    """
+    Gate the LLM chat endpoints behind ``CHAT_ENABLED``.
+
+    Production sets ``CHAT_ENABLED=false`` to take chat offline until it is
+    hardened, without unmounting the routes or hiding chat history. Read-only
+    history endpoints stay reachable; only the ask/stream endpoints are gated.
+    """
+    if not settings.CHAT_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat is temporarily unavailable.",
+        )
 
 def get_current_user(
     db: Session = Depends(get_db), 
