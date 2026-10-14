@@ -10,9 +10,15 @@ from app.models.user import User
 from app.models.file import File
 from app.models.repository import Repository, RepoStatus
 from app.models.repo_manifest import RepoManifest
-from app.schemas.repository import RepositoryCreate, RepositoryResponse, StructureResponse
+from app.schemas.repository import (
+    DiagramsResponse,
+    RepositoryCreate,
+    RepositoryResponse,
+    StructureResponse,
+)
 from app.api.deps import get_current_user
 from app.services import languages
+from app.ai.diagrams import build_diagrams
 from app.services.manifest_service import build_and_persist_manifest, get_manifest
 from app.services.github_service import (
     cleanup_repository_artifacts,
@@ -191,6 +197,41 @@ def get_repository_structure_markdown(
 
     row = get_manifest(db, repo.id) or build_and_persist_manifest(db, repo)
     return PlainTextResponse(row.markdown, media_type="text/markdown")
+
+
+@router.get("/{repo_id}/diagrams", response_model=DiagramsResponse)
+def get_repository_diagrams(
+    repo_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Return Mermaid architecture diagrams for a repository.
+
+    Built from the deterministic manifest, so there is no clone, re-embedding or
+    LLM call. 409s while the repository is still indexing, because a partial
+    manifest would produce a misleading diagram.
+    """
+    repo = _get_owned_repository(repo_id, db, current_user)
+
+    if not repo.is_complete:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Repository is still being indexed. Architecture diagrams are "
+                "only available once indexing has completed."
+            ),
+        )
+
+    row = get_manifest(db, repo.id)
+    if row is None:
+        row = build_and_persist_manifest(db, repo)
+
+    return DiagramsResponse(
+        repository_id=repo.id,
+        full_name=repo.full_name,
+        diagrams=build_diagrams(row.manifest_json),
+    )
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)

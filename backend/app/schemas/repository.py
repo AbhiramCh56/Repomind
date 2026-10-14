@@ -52,3 +52,20 @@ class StructureResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DiagramsResponse(BaseModel):
+    """
+    Architecture diagrams for a repository, as Mermaid source.
+
+    ``diagrams`` maps a view name (``languages``, ``directories``,
+    ``entrypoints``) to a Mermaid string. Everything is derived from the stored
+    manifest, so the output is deterministic and needs no clone or LLM call.
+    """
+
+    repository_id: UUID4
+    full_name: str
+    diagrams: dict
+
+    class Config:
+        from_attributes = True
