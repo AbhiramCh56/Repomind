@@ -1,5 +1,6 @@
 import uuid
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 # Importing every model registers the SQLAlchemy mappers so relationship
 # strings such as Repository.owner -> "User" can be resolved in tests.
@@ -20,10 +21,22 @@ class FakeQuery:
     def join(self, *args, **kwargs):
         return self
 
+    def outerjoin(self, *args, **kwargs):
+        return self
+
+    def group_by(self, *args, **kwargs):
+        return self
+
+    def order_by(self, *args, **kwargs):
+        return self
+
     def delete(self):
         return 0
 
     def first(self):
+        return self.result
+
+    def one_or_none(self):
         return self.result
 
     def all(self):
@@ -31,16 +44,26 @@ class FakeQuery:
 
 
 class FakeSession:
-    def __init__(self, repository=None, rows=None):
+    def __init__(self, repository=None, rows=None, query_results=None, execute_rows=None):
         self.repository = repository
         self.rows = rows if rows is not None else []
+        # When provided, each query() call consumes the next entry instead of
+        # returning self.rows. Lets a single fake answer several distinct
+        # queries (e.g. per-file chunk counts, then file rows).
+        self.query_results = list(query_results) if query_results else None
+        self.execute_rows = execute_rows if execute_rows is not None else []
         self.added = []
         self.commits = 0
         self.rollbacks = 0
         self.needs_id = []
 
     def query(self, *args):
+        if self.query_results:
+            return FakeQuery(self.repository, rows=self.query_results.pop(0))
         return FakeQuery(self.repository, self.rows)
+
+    def execute(self, *args, **kwargs):
+        return SimpleNamespace(all=lambda: self.execute_rows)
 
     def add(self, obj):
         self.added.append(obj)

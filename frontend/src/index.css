@@ -1,1 +1,23 @@
 @import "tailwindcss";
+
+/*
+ * Live architecture diagrams.
+ *
+ * The motion (nodes gliding, edges drawing in) is driven from JavaScript by a
+ * d3 timer in `components/ArchitectureGraph.tsx` and `LanguagePie.tsx`, not from
+ * CSS. That is deliberate: positions are computed and interpolated every frame,
+ * which CSS transitions cannot express for a graph that re-layouts as it grows.
+ * These rules only cover what the renderer does not set inline.
+ */
+
+.arch-node rect {
+  transition: filter 150ms ease;
+}
+
+.arch-node:hover rect {
+  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.18));
+}
+
+.arch-edge {
+  pointer-events: none;
+}

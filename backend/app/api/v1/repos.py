@@ -11,6 +11,7 @@ from app.models.file import File
 from app.models.repository import Repository, RepoStatus
 from app.models.repo_manifest import RepoManifest
 from app.schemas.repository import (
+    DiagramProgress,
     DiagramsResponse,
     RepositoryCreate,
     RepositoryResponse,
@@ -18,8 +19,12 @@ from app.schemas.repository import (
 )
 from app.api.deps import get_current_user
 from app.services import languages
-from app.ai.diagrams import build_diagrams
-from app.services.manifest_service import build_and_persist_manifest, get_manifest
+from app.ai.diagrams import build_diagrams, build_graphs
+from app.services.manifest_service import (
+    build_and_persist_manifest,
+    build_live_manifest,
+    get_manifest,
+)
 from app.services.github_service import (
     cleanup_repository_artifacts,
     extract_repo_info,
@@ -62,6 +67,8 @@ def _serialize_repository(repo: Repository, db: Session | None = None) -> dict:
         "created_at": repo.created_at,
         "has_embeddings": repo.has_embeddings,
         "is_queryable": repo.is_queryable,
+        "chunk_count": repo.chunk_count or 0,
+        "embedded_count": repo.embedded_count or 0,
         "languages": _language_breakdown(db, repo.id) if db is not None else {},
     }
     return payload
@@ -208,18 +215,39 @@ def get_repository_diagrams(
     """
     Return Mermaid architecture diagrams for a repository.
 
-    Built from the deterministic manifest, so there is no clone, re-embedding or
-    LLM call. 409s while the repository is still indexing, because a partial
-    manifest would produce a misleading diagram.
+    A completed repository is served from its stored manifest, exactly as
+    before (no clone, no re-embedding, no LLM call). While indexing is still
+    running, the response is a *live preview* (``partial: true``) built from a
+    transient manifest over the files already represented in the index. That
+    transient manifest is never persisted, so the canonical manifest and the
+    ``is_complete`` gates around it are untouched.
     """
     repo = _get_owned_repository(repo_id, db, current_user)
 
-    if not repo.is_complete:
+    if repo.status == RepoStatus.FAILED:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "Repository is still being indexed. Architecture diagrams are "
-                "only available once indexing has completed."
+                "Repository indexing failed, so its architecture cannot be "
+                "shown. Reprocess the repository to try again."
+            ),
+        )
+
+    if not repo.is_complete:
+        live = build_live_manifest(db, repo)
+        payload = live.manifest.to_payload()
+        return DiagramsResponse(
+            repository_id=repo.id,
+            full_name=repo.full_name,
+            diagrams=build_diagrams(payload),
+            graphs=build_graphs(payload),
+            partial=True,
+            status=repo.status,
+            progress=DiagramProgress(
+                embedded=repo.embedded_count or 0,
+                chunk_count=repo.chunk_count or 0,
+                live_files=live.live_files,
+                total_files=live.total_files,
             ),
         )
 
@@ -231,6 +259,15 @@ def get_repository_diagrams(
         repository_id=repo.id,
         full_name=repo.full_name,
         diagrams=build_diagrams(row.manifest_json),
+        graphs=build_graphs(row.manifest_json),
+        partial=False,
+        status=repo.status,
+        progress=DiagramProgress(
+            embedded=repo.embedded_count or 0,
+            chunk_count=repo.chunk_count or 0,
+            live_files=row.file_count,
+            total_files=row.file_count,
+        ),
     )
 
 

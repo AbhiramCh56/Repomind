@@ -122,5 +122,118 @@ class EntrypointMapTest(unittest.TestCase):
         self.assertIn('more["+1 more entrypoints"]', source)
 
 
+class BuildGraphsTest(unittest.TestCase):
+    """The structured form the SVG renderer consumes."""
+
+    def test_exposes_every_view(self):
+        result = diagrams.build_graphs(_manifest())
+        self.assertEqual(
+            set(result), {"languages", "directories", "entrypoints"}
+        )
+
+    def test_is_deterministic(self):
+        self.assertEqual(
+            diagrams.build_graphs(_manifest()),
+            diagrams.build_graphs(_manifest()),
+        )
+
+
+class DirectoryModelTest(unittest.TestCase):
+    def test_ids_are_path_based_and_stable(self):
+        model = diagrams.directory_model(_manifest())
+        ids = [node.id for node in model.nodes]
+        self.assertEqual(ids[0], "root")
+        # Path based, so identity survives the tree growing or reordering.
+        self.assertIn("dir:app", ids)
+        self.assertIn("dir:app/services", ids)
+        self.assertIn("dir:docs", ids)
+
+    def test_counts_are_carried_on_the_node(self):
+        model = diagrams.directory_model(_manifest())
+        by_id = {node.id: node for node in model.nodes}
+        self.assertEqual(by_id["root"].files, 10)
+        self.assertEqual(by_id["dir:app"].files, 5)
+        self.assertEqual(by_id["dir:app/services"].files, 2)
+
+    def test_every_edge_targets_a_declared_node(self):
+        model = diagrams.directory_model(_manifest())
+        declared = {node.id for node in model.nodes}
+        for edge in model.edges:
+            self.assertIn(edge.source, declared)
+            self.assertIn(edge.target, declared)
+
+    def test_truncation_uses_a_dashed_more_node(self):
+        model = diagrams.directory_model(_manifest(), max_nodes=1)
+        more = [node for node in model.nodes if node.kind == "more"]
+        self.assertEqual(len(more), 1)
+        self.assertEqual(more[0].label, "+2 more directories")
+        dashed = [edge for edge in model.edges if edge.style == diagrams.DASHED]
+        self.assertEqual([(e.source, e.target) for e in dashed], [("root", "more")])
+
+    def test_ids_do_not_shift_when_a_sibling_is_inserted(self):
+        before = diagrams.directory_model(_manifest())
+        grown = _manifest(
+            directories=[
+                {"path": ".", "files": 1},
+                {"path": "app", "files": 3},
+                {"path": "app/services", "files": 2},
+                {"path": "docs", "files": 4},
+                {"path": "api", "files": 9},
+            ]
+        )
+        after = diagrams.directory_model(grown)
+        # ``api`` becomes the largest subtree and is emitted first, but the ids
+        # of the pre-existing nodes must not change.
+        self.assertIn("dir:app/services", [node.id for node in after.nodes])
+        for node in before.nodes:
+            self.assertIn(node.id, [n.id for n in after.nodes])
+        self.assertEqual(
+            [node.id for node in after.nodes][1], "dir:api"
+        )
+
+
+class EntrypointModelTest(unittest.TestCase):
+    def test_lists_entrypoints_with_language_sublabels(self):
+        model = diagrams.entrypoint_model(_manifest())
+        by_id = {node.id: node for node in model.nodes}
+        self.assertIn("ep:app/main.py", by_id)
+        self.assertEqual(by_id["ep:app/main.py"].sublabel, "Python")
+
+    def test_empty_manifest_uses_a_none_node(self):
+        model = diagrams.entrypoint_model({})
+        self.assertEqual([node.kind for node in model.nodes], ["hub", "none"])
+
+    def test_truncation_uses_a_dashed_more_node(self):
+        model = diagrams.entrypoint_model(_manifest(), max_nodes=1)
+        self.assertEqual(
+            [node.label for node in model.nodes if node.kind == "more"],
+            ["+1 more entrypoints"],
+        )
+
+
+class LanguageModelTest(unittest.TestCase):
+    def test_slices_are_labelled_and_counted(self):
+        model = diagrams.language_model(_manifest())
+        values = {slice_.label: slice_.value for slice_ in model.slices}
+        self.assertEqual(values["Python"], 6)
+        self.assertEqual(values["Markdown"], 4)
+
+    def test_empty_manifest_has_a_placeholder_slice(self):
+        model = diagrams.language_model({})
+        self.assertEqual(
+            [(slice_.id, slice_.value) for slice_ in model.slices],
+            [("none", 1)],
+        )
+
+    def test_zero_count_languages_are_skipped(self):
+        model = diagrams.language_model({"languages": {"Empty": {"files": 0}}})
+        self.assertEqual([slice_.id for slice_ in model.slices], ["none"])
+
+    def test_respects_the_slice_cap(self):
+        languages = {f"Lang{i}": {"files": i + 1} for i in range(30)}
+        model = diagrams.language_model({"languages": languages})
+        self.assertEqual(len(model.slices), diagrams.MAX_LANGUAGE_SLICES)
+
+
 if __name__ == "__main__":
     unittest.main()

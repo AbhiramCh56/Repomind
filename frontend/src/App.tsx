@@ -161,13 +161,18 @@ export default function App() {
       const res = await api.get("/repos/");
       setRepositories(res.data);
       setSelectedRepoId((prev) => {
-        if (!prev && res.data.length > 0) {
-          const firstValid = res.data.find(
-            (r: any) => r.status === "completed" && r.is_queryable,
-          );
-          return firstValid ? firstValid.id : prev;
-        }
-        return prev;
+        if (prev) return prev;
+        // Prefer a repository that is still importing: the architecture view
+        // can show it being built live, which is more useful than jumping to an
+        // already-finished one.
+        const importing = res.data.find((r: any) =>
+          IN_PROGRESS_STATUSES.includes(r.status),
+        );
+        if (importing) return importing.id;
+        const firstValid = res.data.find(
+          (r: any) => r.status === "completed" && r.is_queryable,
+        );
+        return firstValid ? firstValid.id : prev;
       });
     } catch (err: any) {
       console.error(err);

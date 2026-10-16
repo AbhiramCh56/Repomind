@@ -111,10 +111,16 @@ def embed_repository_chunks(repo_id: str, db: Session) -> EmbeddingResult:
     if not repo:
         raise ValueError(f"Repository {repo_id} not found for embedding.")
 
+    # Deterministic order: file path, then start line. Chunks of a file are
+    # therefore embedded contiguously, walking the tree top-down, which is what
+    # lets the live architecture preview map embedded_count -> whole files
+    # (see manifest_service.compute_live_file_ids). Do not drop this ORDER BY:
+    # without it the prefix math is only a guess.
     chunks_with_files = (
         db.query(Chunk, File)
         .join(File, Chunk.file_id == File.id)
         .filter(File.repository_id == repo_id)
+        .order_by(File.file_path, Chunk.start_line, Chunk.id)
         .all()
     )
     total = len(chunks_with_files)
@@ -122,6 +128,11 @@ def embed_repository_chunks(repo_id: str, db: Session) -> EmbeddingResult:
         raise ValueError(f"No chunks found for {repo.full_name}; nothing to embed.")
 
     delete_repository_collection(repo_id)
+
+    # A reprocess must never show stale progress from the previous run while
+    # the new batches are landing.
+    repo.embedded_count = 0
+    db.commit()
 
     collection_name = get_collection_name(repo_id)
     collection = get_chroma_client().get_or_create_collection(
@@ -177,6 +188,11 @@ def embed_repository_chunks(repo_id: str, db: Session) -> EmbeddingResult:
                 errors.append(f"batch {batch_number}/{total_batches}: {exc}")
                 break
             embedded += len(batch_docs)
+            # Commit progress per batch so the API can report an honest
+            # "embedded N of M" while the import is still running. This is what
+            # drives the live architecture preview.
+            repo.embedded_count = embedded
+            db.commit()
             logger.info("Embedded batch %s/%s", batch_number, total_batches)
             break
 

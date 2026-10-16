@@ -28,6 +28,10 @@ class RepositoryResponse(BaseModel):
     # True when the repo can answer questions at all: either it has vectors, or
     # it is a docs/config-only repo represented entirely by its manifest.
     is_queryable: bool = False
+    # Honest indexing progress, surfaced so the UI can show how far a live
+    # import has got instead of a bare status label.
+    chunk_count: int = 0
+    embedded_count: int = 0
     languages: dict = {}
 
     class Config:
@@ -54,18 +58,39 @@ class StructureResponse(BaseModel):
         from_attributes = True
 
 
+class DiagramProgress(BaseModel):
+    """How much of a repository is represented in the diagrams right now."""
+
+    embedded: int = 0
+    chunk_count: int = 0
+    live_files: int = 0
+    total_files: int = 0
+
+
 class DiagramsResponse(BaseModel):
     """
     Architecture diagrams for a repository, as Mermaid source.
 
     ``diagrams`` maps a view name (``languages``, ``directories``,
-    ``entrypoints``) to a Mermaid string. Everything is derived from the stored
-    manifest, so the output is deterministic and needs no clone or LLM call.
+    ``entrypoints``) to a Mermaid string. ``graphs`` carries the same views as
+    structured nodes/edges with stable ids, which the frontend renders as SVG so
+    it can animate files joining the diagram as an import progresses. Both are
+    derived from the stored manifest, so the output is deterministic and needs no
+    clone or LLM call.
+
+    While a repository is still indexing, ``partial`` is true and the views are a
+    live preview built from the files already represented in the index (a
+    transient manifest, never persisted). ``progress`` describes how far the
+    import has got so the frontend can poll and animate files joining in.
     """
 
     repository_id: UUID4
     full_name: str
     diagrams: dict
+    graphs: dict = {}
+    partial: bool = False
+    status: RepoStatus
+    progress: DiagramProgress | None = None
 
     class Config:
         from_attributes = True

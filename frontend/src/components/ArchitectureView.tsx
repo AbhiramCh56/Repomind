@@ -1,55 +1,14 @@
-import { useEffect, useId, useState } from "react";
-import mermaid from "mermaid";
+import { useEffect, useState } from "react";
 import api from "../api/axiosConfig";
+import ArchitectureGraph from "./ArchitectureGraph";
+import LanguagePie from "./LanguagePie";
+import type { PieGraph, TreeGraph } from "../lib/architecture";
 
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-  theme: "default",
-});
+// The live preview polls while a repository is still indexing; the backend
+// commits embedding progress per batch, so a coarse interval is plenty.
+const POLL_INTERVAL_MS = 2000;
 
-// Mermaid.render needs a DOM id that is unique at call time. React StrictMode
-// runs effects twice in development, so a module counter is safer than useId.
-let renderCounter = 0;
-
-function Mermaid({ chart }: { chart: string }) {
-  const [svg, setSvg] = useState("");
-  const [error, setError] = useState("");
-  const reactId = useId();
-
-  useEffect(() => {
-    let active = true;
-    const id = `mermaid-${reactId.replace(/[^a-zA-Z0-9]/g, "")}-${renderCounter++}`;
-
-    mermaid
-      .render(id, chart)
-      .then((result) => {
-        if (active) setSvg(result.svg);
-      })
-      .catch((err: any) => {
-        if (active) setError(err?.message || "Could not render this diagram.");
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [chart, reactId]);
-
-  if (error) {
-    return (
-      <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
-        {error}
-      </p>
-    );
-  }
-
-  return (
-    <div
-      className="overflow-x-auto bg-white border border-gray-200 rounded-lg p-4"
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
-  );
-}
+type Diagrams = Record<string, TreeGraph | PieGraph>;
 
 const SECTIONS: { key: string; title: string }[] = [
   { key: "languages", title: "Language mix" },
@@ -57,29 +16,92 @@ const SECTIONS: { key: string; title: string }[] = [
   { key: "entrypoints", title: "Entrypoints" },
 ];
 
+const STATUS_LABELS: Record<string, string> = {
+  pending: "queued",
+  cloning: "cloning",
+  processing: "scanning files",
+  embedding: "embedding",
+};
+
+type DiagramProgress = {
+  embedded: number;
+  chunk_count: number;
+  live_files: number;
+  total_files: number;
+};
+
+function progressText(status: string, progress: DiagramProgress | null): string {
+  if (status === "cloning") return "Cloning the repository…";
+  if (status === "processing") {
+    const files = progress ? `${progress.live_files}/${progress.total_files}` : "0/0";
+    return `Scanning files — ${files} files identified.`;
+  }
+  if (status === "embedding" && progress) {
+    return `${progress.embedded}/${progress.chunk_count} chunks embedded.`;
+  }
+  if (progress) {
+    return `${progress.embedded}/${progress.chunk_count} chunks embedded.`;
+  }
+  return "Updating as indexing progresses.";
+}
+
+function DiagramSection({ title, graph }: { title: string; graph?: TreeGraph | PieGraph }) {
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
+        {title}
+      </h2>
+      {!graph ? (
+        <p className="text-sm text-gray-500 bg-white border border-gray-200 rounded-lg p-4">
+          Nothing to show yet.
+        </p>
+      ) : graph.type === "pie" ? (
+        <LanguagePie graph={graph} />
+      ) : (
+        <ArchitectureGraph graph={graph} />
+      )}
+    </section>
+  );
+}
+
 // Keyed by repo id from the parent, so switching repositories remounts this and
 // resets its state without a setState call inside an effect body.
 function DiagramBody({ repoId }: { repoId: string }) {
-  const [diagrams, setDiagrams] = useState<Record<string, string> | null>(null);
+  const [diagrams, setDiagrams] = useState<Diagrams | null>(null);
+  const [status, setStatus] = useState("");
+  const [partial, setPartial] = useState(false);
+  const [progress, setProgress] = useState<DiagramProgress | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
 
-    api
-      .get(`/repos/${repoId}/diagrams`)
-      .then((res) => {
-        if (!cancelled) setDiagrams(res.data.diagrams);
-      })
-      .catch((err: any) => {
+    // Poll while the backend still reports a partial (in-progress) preview and
+    // stop as soon as indexing completes or the request starts failing.
+    const poll = async () => {
+      try {
+        const res = await api.get(`/repos/${repoId}/diagrams`);
+        if (cancelled) return;
+        setDiagrams(res.data.graphs ?? null);
+        setStatus(res.data.status ?? "");
+        setProgress(res.data.progress ?? null);
+        setPartial(Boolean(res.data.partial));
+        setError("");
+        if (res.data.partial) timer = setTimeout(poll, POLL_INTERVAL_MS);
+      } catch (err: any) {
         if (cancelled) return;
         setError(
           err.response?.data?.detail || err.message || "Failed to load diagrams.",
         );
-      });
+      }
+    };
+
+    poll();
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [repoId]);
 
@@ -97,16 +119,35 @@ function DiagramBody({ repoId }: { repoId: string }) {
 
   return (
     <>
+      {partial && (
+        <p className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+          Live preview — {progressText(status, progress)} Files appear as they are
+          indexed.
+        </p>
+      )}
       {SECTIONS.map((section) => (
-        <section key={section.key}>
-          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">
-            {section.title}
-          </h2>
-          <Mermaid chart={diagrams[section.key] ?? ""} />
-        </section>
+        <DiagramSection
+          key={section.key}
+          title={section.title}
+          graph={diagrams[section.key]}
+        />
       ))}
     </>
   );
+}
+
+// In-progress repositories stay selectable so their architecture can be watched
+// as it is built; a failed one cannot produce diagrams at all.
+function repoOptionLabel(repo: any): string {
+  if (repo.status === "embedding" && repo.chunk_count > 0) {
+    const percent = Math.round(
+      ((repo.embedded_count || 0) / repo.chunk_count) * 100,
+    );
+    return `${repo.full_name} — embedding ${percent}%`;
+  }
+  const label = STATUS_LABELS[repo.status];
+  return label ? `${repo.full_name} — ${label}` : repo.full_name;
 }
 
 export default function ArchitectureView({
@@ -114,8 +155,8 @@ export default function ArchitectureView({
   selectedRepoId,
   setSelectedRepoId,
 }: any) {
-  const readyRepos = repositories.filter(
-    (repo: any) => repo.status === "completed",
+  const selectableRepos = repositories.filter(
+    (repo: any) => repo.status !== "failed",
   );
 
   return (
@@ -132,9 +173,9 @@ export default function ArchitectureView({
           <option value="" disabled>
             Select a repository...
           </option>
-          {readyRepos.map((repo: any) => (
+          {selectableRepos.map((repo: any) => (
             <option key={repo.id} value={repo.id}>
-              {repo.full_name}
+              {repoOptionLabel(repo)}
             </option>
           ))}
         </select>

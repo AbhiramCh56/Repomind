@@ -16,10 +16,11 @@ import-safe for the API and background tasks.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.structure import (
@@ -105,6 +106,109 @@ def generate_manifest_from_rows(db: Session, repo: Repository) -> RepoManifest:
         sum(e.symbol_count for e in manifest.entries),
     )
     return manifest
+
+
+def compute_live_file_ids(
+    counts: Iterable[Tuple[str, int]], embedded_count: int
+) -> set:
+    """
+    Return the ids of files fully represented in the index right now.
+
+    ``counts`` yields ``(file_id, chunk_count)`` in the exact order embedding
+    walks the repository (``file_path``, ``start_line``, chunk id), so the chunks
+    of one file are contiguous and the first ``embedded_count`` of them cover
+    whole files except possibly one boundary file.
+
+    Files with no chunks are docs/config files: they are deliberately never
+    embedded (see the docs/config rule in ``repo_processor``), so their row is
+    the whole representation and they join as soon as it exists. This is why the
+    preview starts growing during processing, before embeddings appear, and why
+    the scan cannot stop at the boundary: a docs file later in path order is
+    still "available".
+    """
+    live: set = set()
+    covered = 0
+    past_boundary = False
+
+    for file_id, chunk_count in counts:
+        if not chunk_count:
+            live.add(str(file_id))
+            continue
+        if past_boundary:
+            # Everything after a partially embedded file is unembedded: the
+            # prefixes are ordered, so no later chunk can be in the index yet.
+            continue
+        if covered + chunk_count <= embedded_count:
+            covered += chunk_count
+            live.add(str(file_id))
+        else:
+            past_boundary = True
+
+    return live
+
+
+def live_chunk_counts(db: Session, repo_id: str) -> List[Tuple[str, int]]:
+    """Per-file chunk counts ordered exactly like ``embed_repository_chunks``."""
+    rows = (
+        db.query(File.id, File.file_path, func.count(Chunk.id))
+        .outerjoin(Chunk, Chunk.file_id == File.id)
+        .filter(File.repository_id == repo_id)
+        .group_by(File.id, File.file_path)
+        .order_by(File.file_path, File.id)
+        .all()
+    )
+    return [(str(file_id), int(count or 0)) for file_id, _path, count in rows]
+
+
+@dataclass
+class LiveManifest:
+    """A transient manifest covering only the files indexed so far."""
+
+    manifest: RepoManifest
+    live_files: int
+    total_files: int
+
+
+def build_live_manifest(db: Session, repo: Repository) -> LiveManifest:
+    """
+    Build a manifest over the subset of files already in the index.
+
+    Used only for the live architecture preview while a repository is still
+    cloning, processing, or embedding. The result is **never persisted**: the
+    canonical manifest is still generated once indexing completes, and the
+    ``is_complete`` gates that protect it (structure endpoints, chat readiness,
+    the backfill CLI) stay exactly as they were.
+    """
+    counts = live_chunk_counts(db, str(repo.id))
+    live_ids = compute_live_file_ids(counts, repo.embedded_count or 0)
+
+    files = (
+        db.query(File)
+        .filter(File.repository_id == repo.id)
+        .order_by(File.file_path)
+        .all()
+    )
+    live_files = [f for f in files if str(f.id) in live_ids]
+    symbols = _symbols_for_files(db, [str(f.id) for f in live_files])
+
+    manifest = build_manifest_from_rows(
+        repository_id=str(repo.id),
+        full_name=repo.full_name,
+        files=live_files,
+        symbols_by_file=symbols,
+    )
+
+    logger.debug(
+        "%s: live manifest has %d/%d files (%d/%d chunks embedded)",
+        repo.full_name,
+        len(live_files),
+        len(files),
+        repo.embedded_count or 0,
+        repo.chunk_count or 0,
+    )
+    return LiveManifest(
+        manifest=manifest, live_files=len(live_files), total_files=len(files)
+    )
 
 
 def _manifest_dir() -> Path:
