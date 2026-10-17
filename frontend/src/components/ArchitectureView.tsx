@@ -26,6 +26,16 @@ const SECTIONS: { key: string; title: string }[] = [
   { key: "entrypoints", title: "Entrypoints" },
 ]
 
+/**
+ * Panels that only appear once the manifest is final, with the stagger they
+ * fade in on. The directory map is deliberately absent: it is already on screen
+ * by then, and re-animating it in place would read as a glitch.
+ */
+const REVEAL_DELAY_MS: Record<string, number> = {
+  languages: 0,
+  entrypoints: 90,
+}
+
 type DiagramProgress = {
   embedded: number
   chunk_count: number
@@ -51,12 +61,21 @@ function progressText(status: string, progress: DiagramProgress | null): string 
 function DiagramSection({
   title,
   graph,
+  delay,
 }: {
   title: string
   graph?: TreeGraph | PieGraph
+  /**
+   * Set on the panels that are revealed once indexing finishes, so they fade in
+   * instead of just appearing. `undefined` leaves the panel alone.
+   */
+  delay?: number
 }) {
   return (
-    <Card>
+    <Card
+      className={delay === undefined ? undefined : "reveal-in"}
+      style={delay ? { animationDelay: `${delay}ms` } : undefined}
+    >
       <CardHeader>
         <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
@@ -129,14 +148,12 @@ function DiagramBody({ repoId }: { repoId: string }) {
   }
 
   if (!diagrams) {
+    // We do not know yet whether the repository is still indexing, so show the
+    // shape of the architecture panel — the one that is drawn either way.
     return (
-      <div className="space-y-6">
-        {SECTIONS.map((section) => (
-          <div key={section.key} className="space-y-3">
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-56 w-full rounded-xl" />
-          </div>
-        ))}
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-[460px] w-full rounded-xl" />
       </div>
     )
   }
@@ -145,6 +162,14 @@ function DiagramBody({ repoId }: { repoId: string }) {
     progress && progress.chunk_count > 0
       ? Math.min(100, Math.round((progress.embedded / progress.chunk_count) * 100))
       : null
+
+  // While the repository is still indexing only the architecture is drawn: it is
+  // the one view that can be watched growing, and the other panels would just be
+  // half-built noise next to it. They all appear together once the manifest is
+  // final, which also keeps the layout stable from then on.
+  const sections = partial
+    ? SECTIONS.filter((section) => section.key === "directories")
+    : SECTIONS
 
   return (
     <div className="space-y-6">
@@ -177,11 +202,12 @@ function DiagramBody({ repoId }: { repoId: string }) {
           )}
         </div>
       )}
-      {SECTIONS.map((section) => (
+      {sections.map((section) => (
         <DiagramSection
           key={section.key}
           title={section.title}
           graph={diagrams[section.key]}
+          delay={partial ? undefined : REVEAL_DELAY_MS[section.key]}
         />
       ))}
     </div>

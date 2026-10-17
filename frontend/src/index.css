@@ -175,6 +175,32 @@
 }
 
 /*
+ * Panels revealed once a repository finishes indexing
+ * (`components/ArchitectureView.tsx`). Purely decorative and deliberately tiny:
+ * they fade up so the change of layout reads as intentional rather than a jump.
+ */
+.reveal-in {
+  animation: reveal-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal-in {
+    animation: none;
+  }
+}
+
+/*
  * Landing-page hero diagram (`components/landing/LandingArchitecture.tsx`).
  *
  * Motion is intentionally minimal: cards fade and slide in on first paint,
