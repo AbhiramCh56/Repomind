@@ -18,10 +18,15 @@ import {
 import { prefersReducedMotion } from "../lib/architecture"
 import type { ArchSlice, PieGraph } from "../lib/architecture"
 
-const SIZE = 220
-const RADIUS = SIZE / 2 - 6
-const INNER = RADIUS * 0.55
+const DEFAULT_SIZE = 220
 const PIE_MS = 620
+
+type Geometry = { size: number; radius: number; inner: number }
+
+function geometry(size: number): Geometry {
+  const radius = size / 2 - 6
+  return { size, radius, inner: radius * 0.55 }
+}
 
 const PALETTE = [
   "#3b82f6",
@@ -94,17 +99,16 @@ function renderPie(
   graph: PieGraph,
   colors: Map<string, string>,
   state: PieState,
+  geo: Geometry,
 ): () => void {
   state.timer?.stop()
 
   const root: Selection<SVGSVGElement, unknown, null, undefined> = select(svg)
   let layer = root.select<SVGGElement>("g.pie")
   if (layer.empty()) {
-    layer = root
-      .append("g")
-      .attr("class", "pie")
-      .attr("transform", `translate(${SIZE / 2} ${SIZE / 2})`)
+    layer = root.append("g").attr("class", "pie")
   }
+  layer.attr("transform", `translate(${geo.size / 2} ${geo.size / 2})`)
 
   const target = targetAngles(graph)
   // Every slice in `graph.slices` has a target angle by construction.
@@ -132,7 +136,10 @@ function renderPie(
     }
   }
 
-  const arcFor = arc<Angle>().innerRadius(INNER).outerRadius(RADIUS).cornerRadius(2)
+  const arcFor = arc<Angle>()
+    .innerRadius(geo.inner)
+    .outerRadius(geo.radius)
+    .cornerRadius(2)
 
   const join = layer
     .selectAll<SVGPathElement, ArchSlice>("path.pie-slice")
@@ -200,30 +207,47 @@ function renderPie(
   }
 }
 
-export default function LanguagePie({ graph }: { graph: PieGraph }) {
+export default function LanguagePie({
+  graph,
+  size = DEFAULT_SIZE,
+  stacked = false,
+}: {
+  graph: PieGraph
+  /** Diameter of the donut, so the rail can ask for a tighter one. */
+  size?: number
+  /** Donut above the legend rather than beside it, for narrow columns. */
+  stacked?: boolean
+}) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   const stateRef = useRef<PieState>({ angles: new Map(), timer: null })
   const colors = useMemo(() => assignColors(graph.slices), [graph])
+  const geo = useMemo(() => geometry(size), [size])
 
   useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
-    return renderPie(svg, graph, colors, stateRef.current)
-  }, [graph, colors])
+    return renderPie(svg, graph, colors, stateRef.current, geo)
+  }, [graph, colors, geo])
 
   const total = graph.slices.reduce((sum, slice) => sum + slice.value, 0)
 
   return (
-    <div className="flex flex-wrap items-center gap-6 p-1">
+    <div
+      className={
+        stacked
+          ? "flex flex-col items-center gap-4"
+          : "flex flex-wrap items-center gap-6 p-1"
+      }
+    >
       <svg
         ref={svgRef}
-        width={SIZE}
-        height={SIZE}
+        width={size}
+        height={size}
         className="shrink-0"
         role="img"
         aria-label={graph.title}
       />
-      <ul className="space-y-1.5 text-sm">
+      <ul className={stacked ? "w-full space-y-1.5 text-sm" : "space-y-1.5 text-sm"}>
         {graph.slices.map((slice) => {
           const percent = total > 0 ? Math.round((slice.value / total) * 100) : 0
           return (

@@ -535,7 +535,17 @@ export default function ArchitectureGraph({ graph }: { graph: TreeGraph }) {
   }
 
   return (
-    <div className="relative h-[460px] overflow-hidden rounded-lg border bg-card/40">
+    <div className="absolute inset-0 overflow-hidden">
+      {/*
+       * A faint dot grid so the canvas still reads as a workspace when the tree
+       * is sparse or still being built. Purely decorative: it sits under the
+       * diagram rather than moving with it, like graph paper, and fades out at
+       * the edges so it never competes with the nodes.
+       */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.05)_1px,transparent_1px)] bg-[size:26px_26px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_88%)]"
+      />
       <svg
         ref={svgRef}
         className="size-full cursor-grab touch-none active:cursor-grabbing"
