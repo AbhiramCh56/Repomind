@@ -57,8 +57,17 @@ export interface Box {
 
 /** Rough advance width of the 12px UI font, used to size nodes to their text. */
 const CHAR_WIDTH = 7;
-const MIN_WIDTH = 104;
-const MAX_WIDTH = 264;
+const MIN_WIDTH = 176;
+const MAX_WIDTH = 320;
+/**
+ * Horizontal room taken by the leading icon chip (padding + chip + gap) and by
+ * the trailing padding. Node text is left-aligned next to the chip, so the box
+ * has to be at least as wide as `text + LEADING + TRAILING`.
+ */
+const LEADING = 66;
+const TRAILING = 14;
+const NODE_HEIGHT = 56;
+const NODE_HEIGHT_COMPACT = 44;
 
 export function hasSubline(node: ArchNode): boolean {
   return Boolean(node.sublabel) || node.files > 0;
@@ -79,8 +88,14 @@ export function fitText(text: string, maxWidth: number): string {
 function nodeSize(node: ArchNode) {
   const lines = [node.label, hasSubline(node) ? subline(node) : ""];
   const longest = Math.max(...lines.map((line) => line.length), 6);
-  const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, longest * CHAR_WIDTH + 28));
-  return { width, height: hasSubline(node) ? 46 : 34 };
+  const width = Math.min(
+    MAX_WIDTH,
+    Math.max(MIN_WIDTH, longest * CHAR_WIDTH + LEADING + TRAILING),
+  );
+  return {
+    width,
+    height: hasSubline(node) ? NODE_HEIGHT : NODE_HEIGHT_COMPACT,
+  };
 }
 
 /**

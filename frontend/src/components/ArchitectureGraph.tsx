@@ -9,10 +9,28 @@
  * Node ids from the backend are path based and stable, which is what makes the
  * diff possible: a node that is present in the new graph but not the previous
  * one is an *arrival*, and it grows out of its parent with its edge drawn in.
+ *
+ * The diagram is also interactive. Pan/zoom is a single d3-zoom behaviour over a
+ * `g.arch-viewport` wrapper, so the layout code never has to know about it.
+ * Hovering a node lights up it and its neighbours; clicking one focuses its
+ * subtree and dims everything else. Both are applied by toggling classes on the
+ * live selections, so they never re-run the layout or the animation.
  */
 import { useEffect, useId, useRef } from "react"
 import { useTheme } from "next-themes"
-import { easeCubicInOut, select, timer, type Selection, type Timer } from "d3"
+import {
+  easeCubicInOut,
+  select,
+  timer,
+  zoom as d3Zoom,
+  zoomIdentity,
+  type Selection,
+  type Timer,
+  type ZoomBehavior,
+} from "d3"
+import { Maximize2Icon, MinusIcon, PlusIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import {
   edgePath,
   fitText,
@@ -22,8 +40,16 @@ import {
   subline,
 } from "../lib/architecture"
 import type { ArchEdge, ArchNode, Box, TreeGraph } from "../lib/architecture"
+import { ARCH_ICON_FALLBACK, ARCH_ICON_MARKUP } from "../lib/arch-icons"
 
 const ENTER_MS = 680
+
+/** Leading icon chip geometry, in the same units the node boxes use. */
+const CHIP = 40
+const CHIP_PAD = 14
+const CHIP_GAP = 12
+const ICON_SCALE = 20 / 24
+const TEXT_X = CHIP_PAD + CHIP + CHIP_GAP
 
 type NodeStyle = { fill: string; stroke: string }
 
@@ -42,7 +68,7 @@ type Palette = {
 const LIGHT: Palette = {
   node: {
     root: { fill: "#eef2ff", stroke: "#6366f1" },
-    hub: { fill: "#eef2ff", stroke: "#6366f1" },
+    hub: { fill: "#f5f3ff", stroke: "#8b5cf6" },
     dir: { fill: "#f8fafc", stroke: "#cbd5e1" },
     entrypoint: { fill: "#f0fdf4", stroke: "#86efac" },
     more: { fill: "#fffbeb", stroke: "#fcd34d" },
@@ -57,8 +83,8 @@ const LIGHT: Palette = {
 const DARK: Palette = {
   node: {
     root: { fill: "#312e81", stroke: "#818cf8" },
-    hub: { fill: "#312e81", stroke: "#818cf8" },
-    dir: { fill: "#334155", stroke: "#64748b" },
+    hub: { fill: "#3b0764", stroke: "#a78bfa" },
+    dir: { fill: "#334155", stroke: "#7c8aa5" },
     entrypoint: { fill: "#14532d", stroke: "#4ade80" },
     more: { fill: "#78350f", stroke: "#fbbf24" },
     none: { fill: "#7f1d1d", stroke: "#f87171" },
@@ -75,7 +101,15 @@ type Seen = {
   timer: Timer | null
 }
 
+/** Hover/selection live outside React so they never restart the animation. */
+type Cursor = { current: string | null }
+
 type Root = Selection<SVGSVGElement, unknown, null, undefined>
+type Viewport = Selection<SVGGElement, unknown, null, undefined>
+
+function style(node: ArchNode, palette: Palette): NodeStyle {
+  return palette.node[node.kind] ?? palette.node.dir
+}
 
 function ensureMarker(root: Root, markerId: string, edgeSolid: string): void {
   let defs = root.select<SVGDefsElement>("defs.arch-defs")
@@ -96,23 +130,43 @@ function ensureMarker(root: Root, markerId: string, edgeSolid: string): void {
     .attr("fill", edgeSolid)
 }
 
-function ensureLayers(root: Root): void {
-  if (!root.select("g.arch-edges").empty()) return
-  // Edges first so the nodes paint on top of them.
-  root.append("g").attr("class", "arch-edges")
-  root.append("g").attr("class", "arch-nodes")
+/**
+ * Everything is drawn inside a `g.arch-viewport` so the zoom behaviour only has
+ * to move one element. Edges come before nodes so the cards paint on top.
+ */
+function ensureViewport(root: Root): Viewport {
+  const existing = root.select<SVGGElement>("g.arch-viewport")
+  if (!existing.empty()) return existing
+  const viewport = root.append("g").attr("class", "arch-viewport")
+  viewport.append("g").attr("class", "arch-edges")
+  viewport.append("g").attr("class", "arch-nodes")
+  return viewport
+}
+
+/** Direct children of each node, for walking a subtree on click. */
+function childIndex(graph: TreeGraph): Map<string, string[]> {
+  const children = new Map<string, string[]>()
+  for (const node of graph.nodes) {
+    if (!node.parent) continue
+    const siblings = children.get(node.parent)
+    if (siblings) siblings.push(node.id)
+    else children.set(node.parent, [node.id])
+  }
+  return children
 }
 
 function renderTree(
   svg: SVGSVGElement,
   graph: TreeGraph,
   seen: Seen,
+  hover: Cursor,
+  selected: Cursor,
   markerId: string,
   palette: Palette,
 ): () => void {
   const root = select(svg)
   ensureMarker(root, markerId, palette.edgeSolid)
-  ensureLayers(root)
+  const viewport = ensureViewport(root)
 
   seen.timer?.stop()
 
@@ -154,7 +208,7 @@ function renderTree(
       .map((edge) => edge.id),
   )
 
-  const edgeLayer = root.select<SVGGElement>("g.arch-edges")
+  const edgeLayer = viewport.select<SVGGElement>("g.arch-edges")
   const edgeJoin = edgeLayer
     .selectAll<SVGPathElement, ArchEdge>("path.arch-edge")
     .data(graph.edges, (d) => d.id)
@@ -171,13 +225,15 @@ function renderTree(
     d.style === "dashed" ? palette.edgeDashed : palette.edgeSolid,
   )
 
-  const nodeLayer = root.select<SVGGElement>("g.arch-nodes")
+  const nodeLayer = viewport.select<SVGGElement>("g.arch-nodes")
   const nodeJoin = nodeLayer
     .selectAll<SVGGElement, ArchNode>("g.arch-node")
     .data(graph.nodes, (d) => d.id)
 
   const nodeEnter = nodeJoin.enter().append("g").attr("class", "arch-node")
-  nodeEnter.append("rect").attr("rx", 9).attr("ry", 9)
+  nodeEnter.append("rect").attr("class", "arch-node-box").attr("rx", 12).attr("ry", 12)
+  nodeEnter.append("rect").attr("class", "arch-node-chip").attr("rx", 10)
+  nodeEnter.append("g").attr("class", "arch-node-icon")
   nodeEnter.append("title")
   nodeEnter.append("text").attr("class", "arch-node-label")
   nodeEnter.append("text").attr("class", "arch-node-sub")
@@ -186,13 +242,45 @@ function renderTree(
   const nodesLeaving = nodeJoin.exit<ArchNode>()
 
   nodes
-    .select<SVGRectElement>("rect")
+    .select<SVGRectElement>("rect.arch-node-box")
     .attr("width", (d) => boxOf(d.id).width)
     .attr("height", (d) => boxOf(d.id).height)
-    .attr("fill", (d) => palette.node[d.kind]?.fill ?? palette.node.dir.fill)
-    .attr("stroke", (d) => palette.node[d.kind]?.stroke ?? palette.node.dir.stroke)
+    .attr("fill", (d) => style(d, palette).fill)
+    .attr("fill-opacity", 0.55)
+    .attr("stroke", (d) => style(d, palette).stroke)
     .attr("stroke-width", 1.5)
     .attr("stroke-dasharray", (d) => (d.kind === "more" ? "5 4" : null))
+
+  nodes
+    .select<SVGRectElement>("rect.arch-node-chip")
+    .attr("x", CHIP_PAD)
+    .attr("y", (d) => (boxOf(d.id).height - CHIP) / 2)
+    .attr("width", CHIP)
+    .attr("height", CHIP)
+    .attr("fill", (d) => style(d, palette).stroke)
+    .attr("fill-opacity", 0.16)
+
+  // The glyphs are inlined markup (see `lib/arch-icons.ts`); rebuild them only
+  // when a node's kind changes, which for path-based ids is effectively never.
+  nodes
+    .select<SVGGElement>("g.arch-node-icon")
+    .attr(
+      "transform",
+      (d) =>
+        `translate(${CHIP_PAD + (CHIP - CHIP * ICON_SCALE) / 2}, ${
+          (boxOf(d.id).height - CHIP * ICON_SCALE) / 2
+        }) scale(${ICON_SCALE})`,
+    )
+    .attr("fill", "none")
+    .attr("stroke-width", 2)
+    .attr("stroke-linecap", "round")
+    .attr("stroke-linejoin", "round")
+    .attr("stroke", (d) => style(d, palette).stroke)
+    .each(function (d) {
+      const host = select(this)
+      if (host.attr("data-kind") === d.kind) return
+      host.attr("data-kind", d.kind).html(ARCH_ICON_MARKUP[d.kind] ?? ARCH_ICON_FALLBACK)
+    })
 
   nodes
     .select<SVGTitleElement>("title")
@@ -200,25 +288,25 @@ function renderTree(
 
   nodes
     .select<SVGTextElement>("text.arch-node-label")
-    .attr("text-anchor", "middle")
-    .attr("font-size", 12)
+    .attr("text-anchor", "start")
+    .attr("font-size", 12.5)
     .attr("font-weight", (d) => (d.kind === "root" || d.kind === "hub" ? 600 : 500))
     .attr("fill", palette.label)
-    .attr("x", (d) => boxOf(d.id).width / 2)
+    .attr("x", TEXT_X)
     .attr("y", (d) => {
       const box = boxOf(d.id)
-      return hasSubline(d) ? box.height / 2 - 2 : box.height / 2 + 4
+      return hasSubline(d) ? box.height / 2 - 4 : box.height / 2 + 4
     })
-    .text((d) => fitText(d.label, boxOf(d.id).width - 20))
+    .text((d) => fitText(d.label, boxOf(d.id).width - TEXT_X - 12))
 
   nodes
     .select<SVGTextElement>("text.arch-node-sub")
-    .attr("text-anchor", "middle")
-    .attr("font-size", 10)
+    .attr("text-anchor", "start")
+    .attr("font-size", 10.5)
     .attr("fill", palette.sub)
-    .attr("x", (d) => boxOf(d.id).width / 2)
+    .attr("x", TEXT_X)
     .attr("y", (d) => boxOf(d.id).height / 2 + 13)
-    .text((d) => fitText(subline(d), boxOf(d.id).width - 20))
+    .text((d) => fitText(subline(d), boxOf(d.id).width - TEXT_X - 12))
 
   let width = 0
   let height = 0
@@ -228,10 +316,79 @@ function renderTree(
   })
   const viewWidth = Math.ceil(width + 12)
   const viewHeight = Math.ceil(height + 12)
-  root
-    .attr("width", viewWidth)
-    .attr("height", viewHeight)
-    .attr("viewBox", `0 0 ${viewWidth} ${viewHeight}`)
+  // No width/height attributes: the element is sized by CSS to fill its card,
+  // and the viewBox makes the whole tree fit until the reader zooms in.
+  root.attr("viewBox", `0 0 ${viewWidth} ${viewHeight}`)
+
+  // --- interaction: highlight the hovered neighbourhood / clicked subtree ---
+  const children = childIndex(graph)
+  const neighbours = new Map<string, Set<string>>()
+  for (const node of graph.nodes) neighbours.set(node.id, new Set())
+  for (const edge of graph.edges) {
+    neighbours.get(edge.source)?.add(edge.target)
+    neighbours.get(edge.target)?.add(edge.source)
+  }
+
+  const subtree = (id: string): Set<string> => {
+    const out = new Set([id])
+    const stack = [id]
+    while (stack.length > 0) {
+      const current = stack.pop()!
+      for (const child of children.get(current) ?? []) {
+        if (out.has(child)) continue
+        out.add(child)
+        stack.push(child)
+      }
+    }
+    return out
+  }
+
+  const applyFocus = () => {
+    const hovered = hover.current
+    const chosen = selected.current
+    const focus = hovered ?? chosen
+    if (!focus) {
+      nodes.classed("is-dim", false).classed("is-focus", false)
+      edges.classed("is-dim", false)
+      return
+    }
+    // Hovering looks one hop out; clicking keeps the whole subtree.
+    const lit = hovered
+      ? new Set([hovered, ...(neighbours.get(hovered) ?? [])])
+      : subtree(chosen!)
+    nodes
+      .classed("is-dim", (d) => !lit.has(d.id))
+      .classed("is-focus", (d) => d.id === focus)
+    edges.classed("is-dim", (edge) =>
+      hovered
+        ? edge.source !== hovered && edge.target !== hovered
+        : !(lit.has(edge.source) && lit.has(edge.target)),
+    )
+  }
+
+  nodes
+    .on("pointerenter", (_event: PointerEvent, d: ArchNode) => {
+      hover.current = d.id
+      applyFocus()
+    })
+    .on("pointerleave", () => {
+      hover.current = null
+      applyFocus()
+    })
+    .on("click", (event: MouseEvent, d: ArchNode) => {
+      // Keep the click off the svg background handler below, which clears.
+      event.stopPropagation()
+      selected.current = selected.current === d.id ? null : d.id
+      applyFocus()
+    })
+
+  root.on("click", () => {
+    hover.current = null
+    selected.current = null
+    applyFocus()
+  })
+
+  applyFocus()
 
   const duration = prefersReducedMotion() ? 0 : ENTER_MS
 
@@ -320,6 +477,9 @@ function renderTree(
 export default function ArchitectureGraph({ graph }: { graph: TreeGraph }) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   const seenRef = useRef<Seen>({ boxes: new Map(), timer: null })
+  const hoverRef = useRef<string | null>(null)
+  const selectedRef = useRef<string | null>(null)
+  const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null)
   const markerId = `arch-arrow-${useId().replace(/[^a-zA-Z0-9]/g, "")}`
   const { resolvedTheme } = useTheme()
   const palette = resolvedTheme === "dark" ? DARK : LIGHT
@@ -327,17 +487,98 @@ export default function ArchitectureGraph({ graph }: { graph: TreeGraph }) {
   useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
-    return renderTree(svg, graph, seenRef.current, markerId, palette)
+    return renderTree(
+      svg,
+      graph,
+      seenRef.current,
+      hoverRef,
+      selectedRef,
+      markerId,
+      palette,
+    )
   }, [graph, markerId, palette])
 
+  // One zoom behaviour for the life of the component. It lives on the `<svg>`
+  // itself, so the transform survives every re-render and poll.
+  useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return
+    const root = select(svg)
+    const zoom = d3Zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.3, 4])
+      .on("zoom", (event) => {
+        root
+          .select("g.arch-viewport")
+          .attr("transform", event.transform.toString())
+      })
+    root.call(zoom)
+    zoomRef.current = zoom
+    return () => {
+      root.on(".zoom", null)
+      zoomRef.current = null
+    }
+  }, [])
+
+  const zoomBy = (factor: number) => {
+    const svg = svgRef.current
+    const zoom = zoomRef.current
+    if (!svg || !zoom) return
+    select(svg).call(zoom.scaleBy, factor)
+  }
+
+  const resetZoom = () => {
+    const svg = svgRef.current
+    const zoom = zoomRef.current
+    if (!svg || !zoom) return
+    select(svg).call(zoom.transform, zoomIdentity)
+    selectedRef.current = null
+  }
+
   return (
-    <div className="overflow-x-auto p-1">
+    <div className="relative h-[460px] overflow-hidden rounded-lg border bg-card/40">
       <svg
         ref={svgRef}
-        className="block"
+        className="size-full cursor-grab touch-none active:cursor-grabbing"
         role="img"
-        aria-label="Repository architecture diagram"
+        aria-label="Repository architecture diagram. Scroll to zoom, drag to pan, and click a node to focus its subtree."
       />
+
+      <div className="absolute right-2 top-2 flex flex-col gap-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          className="bg-card/80 backdrop-blur"
+          onClick={() => zoomBy(1.3)}
+          aria-label="Zoom in"
+        >
+          <PlusIcon className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          className="bg-card/80 backdrop-blur"
+          onClick={() => zoomBy(1 / 1.3)}
+          aria-label="Zoom out"
+        >
+          <MinusIcon className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          className="bg-card/80 backdrop-blur"
+          onClick={resetZoom}
+          aria-label="Reset view"
+        >
+          <Maximize2Icon className="size-3.5" />
+        </Button>
+      </div>
+
+      <p className="pointer-events-none absolute bottom-2 left-3 text-xs text-muted-foreground">
+        Scroll to zoom · drag to pan · click a node to focus
+      </p>
     </div>
   )
 }

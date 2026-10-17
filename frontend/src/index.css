@@ -139,14 +139,161 @@
  * These rules only cover what the renderer does not set inline.
  */
 
-.arch-node rect {
-  transition: filter 150ms ease;
+.arch-node {
+  cursor: pointer;
 }
 
-.arch-node:hover rect {
-  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.18));
+.arch-node .arch-node-box {
+  transition:
+    filter 150ms ease,
+    stroke-width 150ms ease;
+}
+
+.arch-node:hover .arch-node-box {
+  filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.4));
+}
+
+.arch-node.is-focus .arch-node-box {
+  stroke-width: 2.5;
+}
+
+/*
+ * Hover/click focus. These are plain classes so the interaction never touches
+ * the inline `opacity` the animation writes every frame — class rules win over
+ * presentation attributes, so dimming can be applied mid-flight.
+ */
+.arch-node.is-dim {
+  opacity: 0.28;
 }
 
 .arch-edge {
   pointer-events: none;
+}
+
+.arch-edge.is-dim {
+  opacity: 0.08;
+}
+
+/*
+ * Landing-page hero diagram (`components/landing/LandingArchitecture.tsx`).
+ *
+ * Motion is intentionally minimal: cards fade and slide in on first paint,
+ * connectors draw themselves, then everything settles. Hovering a card lifts
+ * its border and chip via stroke/fill opacity — never `opacity` or `transform`,
+ * which the entrance animation owns.
+ */
+
+.la-card {
+  animation: la-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.la-card-bg {
+  fill: rgba(17, 19, 40, 0.72);
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-opacity: 0.4;
+  transition:
+    stroke-opacity 200ms ease,
+    filter 200ms ease;
+}
+
+.la-card:hover .la-card-bg {
+  stroke-opacity: 1;
+  filter: drop-shadow(0 10px 26px rgba(0, 0, 0, 0.55));
+}
+
+.la-chip {
+  fill: var(--accent);
+  fill-opacity: 0.15;
+  transition: fill-opacity 200ms ease;
+}
+
+.la-card:hover .la-chip {
+  fill-opacity: 0.26;
+}
+
+.la-icon {
+  color: var(--accent);
+}
+
+.la-title {
+  fill: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.la-sub {
+  fill: #94a3b8;
+  font-size: 12px;
+}
+
+/*
+ * Connectors draw themselves once the cards have settled. Arrowheads are SVG
+ * markers, which a dash animation cannot hide, so they fade in at the moment
+ * the lines finish; every edge shares one timing so the two line up.
+ */
+.la-edge {
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: la-draw 700ms ease 450ms both;
+  transition: opacity 200ms ease;
+}
+
+#la-arrow path {
+  animation: la-fade 240ms ease 1150ms both;
+}
+
+@keyframes la-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes la-draw {
+  from {
+    stroke-dashoffset: 1000;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes la-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .la-card,
+  .la-edge {
+    animation: none;
+  }
+
+  #la-arrow path {
+    animation: none;
+  }
+
+  .la-edge {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
+
+  .la-card-bg,
+  .la-chip,
+  .la-edge {
+    transition: none;
+  }
 }

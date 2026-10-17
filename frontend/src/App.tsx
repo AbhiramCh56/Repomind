@@ -6,6 +6,7 @@ import AuthView from "./components/AuthView"
 import Sidebar from "./components/Sidebar"
 import ChatInterface from "./components/ChatInterface"
 import ArchitectureView from "./components/ArchitectureView"
+import LandingView from "./components/landing/LandingView"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,6 +55,10 @@ export default function App() {
 
   const [chatEnabled, setChatEnabled] = useState(true)
   const [activeView, setActiveView] = useState<"chat" | "architecture">("chat")
+
+  // Pre-login: the marketing landing page shows first; "Get Started" reveals the
+  // sign-in form, and the auth screen can go back to the landing.
+  const [authStarted, setAuthStarted] = useState(false)
 
   // The public health probe is the cheapest way to learn whether the backend
   // has chat gated off, so the UI can hide it instead of failing on send.
@@ -310,6 +315,9 @@ export default function App() {
   const view = chatEnabled ? activeView : "architecture"
 
   if (!userProfile) {
+    if (!authStarted) {
+      return <LandingView onGetStarted={() => setAuthStarted(true)} />
+    }
     return (
       <AuthView
         email={email}
@@ -319,6 +327,7 @@ export default function App() {
         handleLogin={handleLogin}
         handleRegister={handleRegister}
         message={message}
+        onBack={() => setAuthStarted(false)}
       />
     )
   }
