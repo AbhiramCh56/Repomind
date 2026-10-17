@@ -1,4 +1,5 @@
 /*node_modules
+/train-image
 .venv
 **/*.env
 .env.*
