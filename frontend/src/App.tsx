@@ -6,7 +6,6 @@ import AuthView from "./components/AuthView"
 import Sidebar from "./components/Sidebar"
 import ChatInterface from "./components/ChatInterface"
 import ArchitectureView from "./components/ArchitectureView"
-import { ThemeToggle } from "./components/theme-toggle"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -360,7 +359,6 @@ export default function App() {
                 Chat is temporarily unavailable.
               </span>
             )}
-            <ThemeToggle />
           </div>
         </header>
 

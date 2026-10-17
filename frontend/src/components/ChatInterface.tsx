@@ -74,7 +74,7 @@ export default function ChatInterface({
         </Select>
       </div>
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
           {chatHistory.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-24 text-center text-muted-foreground">

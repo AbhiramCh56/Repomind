@@ -129,7 +129,7 @@ export default function Sidebar({
         <h3 className="px-4 pb-3 pt-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Your repositories
         </h3>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="px-4 pb-4">
             {repositories.length === 0 ? (
               <p className="text-sm italic text-muted-foreground">
