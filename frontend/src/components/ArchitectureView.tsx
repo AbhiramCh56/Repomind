@@ -13,13 +13,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 
 // The live preview polls while a repository is still indexing; the backend
 // commits embedding progress per batch, so a coarse interval is plenty.
@@ -32,13 +25,6 @@ const SECTIONS: { key: string; title: string }[] = [
   { key: "directories", title: "Directory map" },
   { key: "entrypoints", title: "Entrypoints" },
 ]
-
-const STATUS_LABELS: Record<string, string> = {
-  pending: "queued",
-  cloning: "cloning",
-  processing: "scanning files",
-  embedding: "embedding",
-}
 
 type DiagramProgress = {
   embedded: number
@@ -155,18 +141,40 @@ function DiagramBody({ repoId }: { repoId: string }) {
     )
   }
 
+  const percent =
+    progress && progress.chunk_count > 0
+      ? Math.min(100, Math.round((progress.embedded / progress.chunk_count) * 100))
+      : null
+
   return (
     <div className="space-y-6">
       {partial && (
-        <div className="flex items-center gap-2.5 rounded-lg border bg-card px-3 py-2 text-sm">
-          <span className="relative flex size-2 flex-shrink-0">
-            <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/70 motion-reduce:animate-none" />
-            <span className="relative inline-flex size-2 rounded-full bg-primary" />
-          </span>
-          <span className="text-muted-foreground">
-            Live preview — {progressText(status, progress)} Files appear as they
-            are indexed.
-          </span>
+        <div className="space-y-2.5 rounded-lg border bg-card px-3 py-2.5">
+          <div className="flex items-center gap-2.5 text-sm">
+            <span className="relative flex size-2 flex-shrink-0">
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/70 motion-reduce:animate-none" />
+              <span className="relative inline-flex size-2 rounded-full bg-primary" />
+            </span>
+            <span className="text-muted-foreground">
+              Building live — {progressText(status, progress)} Chat unlocks once
+              this finishes.
+            </span>
+          </div>
+          {percent !== null && (
+            <div
+              className="h-1 overflow-hidden rounded-full bg-muted"
+              role="progressbar"
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`Indexing ${percent}% complete`}
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                style={{ width: `${percent}%` }}
+              />
+            </div>
+          )}
         </div>
       )}
       {SECTIONS.map((section) => (
@@ -180,65 +188,35 @@ function DiagramBody({ repoId }: { repoId: string }) {
   )
 }
 
-// In-progress repositories stay selectable so their architecture can be watched
-// as it is built; a failed one cannot produce diagrams at all.
-function repoOptionLabel(repo: any): string {
-  if (repo.status === "embedding" && repo.chunk_count > 0) {
-    const percent = Math.round(
-      ((repo.embedded_count || 0) / repo.chunk_count) * 100,
-    )
-    return `${repo.full_name} — embedding ${percent}%`
-  }
-  const label = STATUS_LABELS[repo.status]
-  return label ? `${repo.full_name} — ${label}` : repo.full_name
-}
-
+/**
+ * The repository's architecture, as a scrolling column of diagram cards.
+ *
+ * The active repository is chosen in the shell header, so there is no picker
+ * here; this view only has to know which repository to draw.
+ */
 export default function ArchitectureView({
-  repositories,
   selectedRepoId,
-  setSelectedRepoId,
-}: any) {
-  const selectableRepos = repositories.filter(
-    (repo: any) => repo.status !== "failed",
-  )
+}: {
+  selectedRepoId: string
+}) {
+  if (!selectedRepoId) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <div className="text-center text-muted-foreground">
+          <p className="text-lg font-medium text-foreground">
+            Select a repository to see its architecture
+          </p>
+          <p className="mt-1 text-sm">
+            Diagrams are generated from the deterministic repository manifest.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex h-16 flex-shrink-0 items-center gap-3 border-b bg-card px-6">
-        <label className="text-sm font-medium text-muted-foreground">
-          Active context
-        </label>
-        <Select
-          value={selectedRepoId ? String(selectedRepoId) : undefined}
-          onValueChange={setSelectedRepoId}
-        >
-          <SelectTrigger className="h-9 w-full max-w-md">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {selectableRepos.map((repo: any) => (
-              <SelectItem key={repo.id} value={String(repo.id)}>
-                {repoOptionLabel(repo)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6">
-        {selectedRepoId ? (
-          <DiagramBody key={selectedRepoId} repoId={selectedRepoId} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <p className="text-lg font-medium text-foreground">
-              Select a repository to see its architecture
-            </p>
-            <p className="text-sm">
-              Diagrams are generated from the deterministic repository manifest.
-            </p>
-          </div>
-        )}
-      </div>
+    <div className="min-h-0 flex-1 overflow-y-auto p-6">
+      <DiagramBody key={selectedRepoId} repoId={selectedRepoId} />
     </div>
   )
 }

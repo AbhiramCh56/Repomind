@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react"
+import { useRef, useState, useEffect } from "react"
 import { toast } from "sonner"
+import { Loader2Icon } from "lucide-react"
 
 import api from "./api/axiosConfig"
 import AuthView from "./components/AuthView"
@@ -7,6 +8,8 @@ import Sidebar from "./components/Sidebar"
 import ChatInterface from "./components/ChatInterface"
 import ArchitectureView from "./components/ArchitectureView"
 import LandingView from "./components/landing/LandingView"
+import OnboardingView from "./components/OnboardingView"
+import RepoStatusBadge from "./components/RepoStatusBadge"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,32 +20,49 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { isImporting, isRepoReady, repoOptionLabel, type Repo } from "./lib/repos"
 
 // Backend origin for the few requests that bypass the axios instance: the SSE
 // chat stream and the public /health probe (which lives outside /api/v1).
 const API_ORIGIN = import.meta.env.VITE_API_URL || "http://localhost:8000"
 
-// Every status that means the backend is still working on the repository.
-// Polling must cover all of them, otherwise the UI freezes mid-import.
-const IN_PROGRESS_STATUSES = [
-  "pending",
-  "cloning",
-  "processing",
-  "embedding",
-]
-
 // The row the delete confirmation dialog is currently acting on.
-type PendingDelete = { id: string | number; name: string } | null
+type PendingDelete = Repo | null
+
+/** Neutral holding screen while the session or the repository list resolves. */
+function BootScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <Loader2Icon className="size-5 animate-spin text-muted-foreground motion-reduce:animate-none" />
+    </div>
+  )
+}
 
 export default function App() {
   const [email, setEmail] = useState("test@example.com")
   const [password, setPassword] = useState("password123")
   const [message, setMessage] = useState("")
   const [userProfile, setUserProfile] = useState(null)
+  // A stored token means we must not paint the landing page before we know
+  // whether it is still valid; hold the boot screen until the profile resolves.
+  const [checkingAuth, setCheckingAuth] = useState(() =>
+    Boolean(localStorage.getItem("access_token")),
+  )
 
   const [repoUrl, setRepoUrl] = useState("")
-  const [repositories, setRepositories] = useState<any[]>([])
+  const [repositories, setRepositories] = useState<Repo[]>([])
+  // Distinguishes "no repositories yet" from "repositories not fetched yet":
+  // the first deserves the import screen, the second must never flash it.
+  const [reposLoaded, setReposLoaded] = useState(false)
+  const [isAddingRepo, setIsAddingRepo] = useState(false)
   const [selectedRepoId, setSelectedRepoId] = useState("")
   const [repoToDelete, setRepoToDelete] = useState<PendingDelete>(null)
 
@@ -54,7 +74,11 @@ export default function App() {
   const [isChatLoading, setIsChatLoading] = useState(false)
 
   const [chatEnabled, setChatEnabled] = useState(true)
-  const [activeView, setActiveView] = useState<"chat" | "architecture">("chat")
+  // The architecture is the product's front door, so that is where a session
+  // opens; chat becomes selectable once the repository is indexed.
+  const [activeView, setActiveView] = useState<"chat" | "architecture">(
+    "architecture",
+  )
 
   // Pre-login: the marketing landing page shows first; "Get Started" reveals the
   // sign-in form, and the auth screen can go back to the landing.
@@ -117,9 +141,7 @@ export default function App() {
   }, [selectedRepoId])
 
   useEffect(() => {
-    const isProcessing = repositories.some((repo: any) =>
-      IN_PROGRESS_STATUSES.includes(repo.status),
-    )
+    const isProcessing = repositories.some((repo) => isImporting(repo))
     let intervalId: any
     if (isProcessing && userProfile) {
       intervalId = setInterval(() => handleFetchRepos(), 2000)
@@ -162,6 +184,7 @@ export default function App() {
       localStorage.removeItem("access_token")
       setUserProfile(null)
       setRepositories([])
+      setReposLoaded(false)
       setChatHistory([])
       setCurrentSessionId(null)
       setSelectedRepoId("")
@@ -175,50 +198,64 @@ export default function App() {
       handleFetchRepos()
     } catch (err: any) {
       console.error(err)
+    } finally {
+      setCheckingAuth(false)
     }
   }
 
   const handleFetchRepos = async () => {
     try {
       const res = await api.get("/repos/")
-      setRepositories(res.data)
+      const repos = res.data as Repo[]
+      setRepositories(repos)
       setSelectedRepoId((prev) => {
-        if (prev) return prev
-        // Prefer a repository that is still importing: the architecture view
-        // can show it being built live, which is more useful than jumping to an
-        // already-finished one.
-        const importing = res.data.find((r: any) =>
-          IN_PROGRESS_STATUSES.includes(r.status),
-        )
-        if (importing) return importing.id
-        const firstValid = res.data.find(
-          (r: any) => r.status === "completed" && r.is_queryable,
-        )
-        return firstValid ? firstValid.id : prev
+        // Keep the current choice while it still exists — the list refetches on
+        // every poll, and re-picking a repository mid-import would reset the
+        // view underneath the user.
+        if (prev && repos.some((repo) => String(repo.id) === String(prev))) {
+          return prev
+        }
+        // Otherwise prefer a repository that is still importing: its
+        // architecture can be watched being built, which is more useful than
+        // jumping straight to an already-finished one.
+        const importing = repos.find((repo) => isImporting(repo))
+        if (importing) return String(importing.id)
+        const ready = repos.find((repo) => isRepoReady(repo))
+        if (ready) return String(ready.id)
+        return repos[0] ? String(repos[0].id) : ""
       })
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
+    } finally {
+      setReposLoaded(true)
     }
   }
 
   const handleAddRepo = async () => {
-    if (!repoUrl) return
+    if (!repoUrl.trim() || isAddingRepo) return
+    setIsAddingRepo(true)
     try {
-      await api.post("/repos/", { github_url: repoUrl })
+      const res = await api.post("/repos/", { github_url: repoUrl })
       setRepoUrl("")
-      toast.success("Repository added to your workspace.")
-      handleFetchRepos()
+      toast.success("Repository added. Building its architecture…")
+      // Land on the new repository straight away: the architecture view can
+      // show it being built live while the index runs.
+      if (res.data?.id !== undefined) setSelectedRepoId(String(res.data.id))
+      setActiveView("architecture")
+      await handleFetchRepos()
     } catch (err: any) {
       toast.error(
         `Add repo failed: ${err.response?.data?.detail || err.message}`,
       )
+    } finally {
+      setIsAddingRepo(false)
     }
   }
 
   const handleDeleteRepo = async (repoId: string | number) => {
     try {
       await api.delete(`/repos/${repoId}`)
-      if (selectedRepoId === repoId) setSelectedRepoId("")
+      if (String(selectedRepoId) === String(repoId)) setSelectedRepoId("")
       toast.success("Repository deleted.")
       handleFetchRepos()
     } catch (err: any) {
@@ -228,7 +265,7 @@ export default function App() {
     }
   }
 
-  const handleReprocessRepo = async (repoId: string) => {
+  const handleReprocessRepo = async (repoId: string | number) => {
     try {
       await api.post(`/repos/${repoId}/reprocess`)
       toast.success("Re-import started.")
@@ -310,9 +347,49 @@ export default function App() {
     }
   }
 
-  // Never leave the user stranded on a tab that is switched off server-side:
-  // when chat is gated off, the effective view is always architecture.
-  const view = chatEnabled ? activeView : "architecture"
+  const selectableRepos = repositories.filter((repo) => repo.status !== "failed")
+  const activeRepo =
+    repositories.find((repo) => String(repo.id) === String(selectedRepoId)) ??
+    null
+  const repoReady = isRepoReady(activeRepo)
+  // Chat needs both a server that offers it *and* a repository that has finished
+  // indexing. Until then the effective view stays on the architecture, so the
+  // user watches the build instead of typing into a box that cannot answer.
+  const chatAvailable = chatEnabled && repoReady
+  const view: "chat" | "architecture" =
+    chatAvailable && activeView === "chat" ? "chat" : "architecture"
+  const chatHint = !chatEnabled
+    ? "Chat is temporarily unavailable."
+    : !repoReady
+      ? "Chat unlocks once this repository finishes indexing."
+      : undefined
+
+  // Announce the switch instead of silently enabling the chat tab. Only
+  // repositories seen importing during this session qualify, so opening an
+  // already-finished repository does not fire a toast.
+  const seenImporting = useRef<Set<string>>(new Set())
+  const announcedReady = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!activeRepo) return
+    const id = String(activeRepo.id)
+    if (isImporting(activeRepo)) {
+      seenImporting.current.add(id)
+      return
+    }
+    if (
+      isRepoReady(activeRepo) &&
+      seenImporting.current.has(id) &&
+      !announcedReady.current.has(id)
+    ) {
+      announcedReady.current.add(id)
+      seenImporting.current.delete(id)
+      toast.success("Indexing complete — chat is ready.")
+    }
+  }, [activeRepo])
+
+  if (checkingAuth) {
+    return <BootScreen />
+  }
 
   if (!userProfile) {
     if (!authStarted) {
@@ -332,11 +409,33 @@ export default function App() {
     )
   }
 
+  // Repositories are still loading: showing the import screen here would flash
+  // it at a user who already has one.
+  if (!reposLoaded) {
+    return <BootScreen />
+  }
+
+  // The first-run screen: no repositories, so importing one *is* the app.
+  if (repositories.length === 0) {
+    return (
+      <OnboardingView
+        repoUrl={repoUrl}
+        setRepoUrl={setRepoUrl}
+        onImport={handleAddRepo}
+        importing={isAddingRepo}
+        userProfile={userProfile}
+        onLogout={handleLogout}
+      />
+    )
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar
         userProfile={userProfile}
         repositories={repositories}
+        selectedRepoId={selectedRepoId}
+        onSelectRepo={setSelectedRepoId}
         repoUrl={repoUrl}
         setRepoUrl={setRepoUrl}
         handleAddRepo={handleAddRepo}
@@ -350,33 +449,50 @@ export default function App() {
         onValueChange={(v) => setActiveView(v as "chat" | "architecture")}
         className="flex min-w-0 flex-1 flex-col gap-0"
       >
+        {/*
+         * One header for the whole workspace. The repository switcher used to
+         * live in a second bar inside each view; keeping it here means the
+         * active context is always visible and never duplicated.
+         */}
         <header className="flex h-14 flex-shrink-0 items-center gap-3 border-b bg-card px-4">
           <TabsList>
-            <TabsTrigger
-              value="chat"
-              disabled={!chatEnabled}
-              title={chatEnabled ? undefined : "Chat is temporarily unavailable."}
-            >
+            <TabsTrigger value="chat" disabled={!chatAvailable} title={chatHint}>
               Chat
             </TabsTrigger>
             <TabsTrigger value="architecture">Architecture</TabsTrigger>
           </TabsList>
 
-          <div className="ml-auto flex items-center gap-2">
-            {!chatEnabled && (
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                Chat is temporarily unavailable.
+          <div className="ml-auto flex min-w-0 items-center gap-3">
+            {activeRepo && (
+              <span className="hidden sm:inline-flex">
+                <RepoStatusBadge repo={activeRepo} />
               </span>
             )}
+            <Select
+              value={selectedRepoId || undefined}
+              onValueChange={setSelectedRepoId}
+            >
+              <SelectTrigger
+                className="h-8 w-full max-w-xs"
+                aria-label="Active repository"
+              >
+                <SelectValue placeholder="Select a repository" />
+              </SelectTrigger>
+              <SelectContent>
+                {selectableRepos.map((repo) => (
+                  <SelectItem key={repo.id} value={String(repo.id)}>
+                    {repoOptionLabel(repo)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </header>
 
         <div className="flex min-h-0 flex-1">
           {view === "chat" ? (
             <ChatInterface
-              repositories={repositories}
               selectedRepoId={selectedRepoId}
-              setSelectedRepoId={setSelectedRepoId}
               chatHistory={chatHistory}
               chatInput={chatInput}
               setChatInput={setChatInput}
@@ -384,11 +500,7 @@ export default function App() {
               isChatLoading={isChatLoading}
             />
           ) : (
-            <ArchitectureView
-              repositories={repositories}
-              selectedRepoId={selectedRepoId}
-              setSelectedRepoId={setSelectedRepoId}
-            />
+            <ArchitectureView selectedRepoId={selectedRepoId} />
           )}
         </div>
       </Tabs>

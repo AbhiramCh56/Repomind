@@ -7,7 +7,7 @@ import {
   Trash2Icon,
 } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
+import RepoStatusBadge from "./RepoStatusBadge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -26,61 +26,33 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { embeddingPercent, type Repo } from "../lib/repos"
 
-// Human-readable label for each in-flight pipeline stage reported by the API.
-const STAGE_LABELS: Record<string, string> = {
-  pending: "Queued",
-  cloning: "Cloning",
-  processing: "Parsing code",
-  embedding: "Building index",
-}
-
-function StatusBadge({ repo }: { repo: any }) {
-  if (repo.status === "failed") {
-    return (
-      <Badge variant="destructive" title={repo.error_message || undefined}>
-        Failed
-      </Badge>
-    )
-  }
-  if (repo.status === "completed") {
-    if (repo.is_queryable) {
-      return (
-        <Badge
-          variant="outline"
-          className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-          title={
-            repo.has_embeddings
-              ? undefined
-              : "No embedded code. Answers come from the repository manifest."
-          }
-        >
-          Ready
-        </Badge>
-      )
-    }
-    return <Badge variant="destructive">Needs Re-import</Badge>
-  }
-  return (
-    <Badge
-      variant="outline"
-      className="animate-pulse border-amber-500/30 bg-amber-500/10 text-amber-600 motion-reduce:animate-none dark:text-amber-400"
-    >
-      {STAGE_LABELS[repo.status] ?? "Processing..."}
-    </Badge>
-  )
+type SidebarProps = {
+  userProfile: { email?: string } | null
+  repositories: Repo[]
+  selectedRepoId: string
+  onSelectRepo: (id: string) => void
+  repoUrl: string
+  setRepoUrl: (value: string) => void
+  handleAddRepo: () => void
+  handleReprocessRepo: (id: string | number) => void
+  handleRequestDelete: (repo: Repo) => void
+  handleLogout: () => void
 }
 
 export default function Sidebar({
   userProfile,
   repositories,
+  selectedRepoId,
+  onSelectRepo,
   repoUrl,
   setRepoUrl,
   handleAddRepo,
   handleReprocessRepo,
   handleRequestDelete,
   handleLogout,
-}: any) {
+}: SidebarProps) {
   return (
     <aside className="flex w-80 flex-shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex items-center gap-3 p-5">
@@ -110,6 +82,7 @@ export default function Sidebar({
           id="repo-url"
           value={repoUrl}
           onChange={(e) => setRepoUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAddRepo()}
           placeholder="https://github.com/..."
           className="h-9"
         />
@@ -137,65 +110,109 @@ export default function Sidebar({
               </p>
             ) : (
               <ul className="space-y-2">
-                {repositories.map((repo: any) => (
-                  <li
-                    key={repo.id}
-                    className="rounded-lg border bg-card p-3 text-card-foreground shadow-xs"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div
-                          className="truncate text-sm font-medium"
-                          title={repo.full_name}
-                        >
-                          {repo.name}
-                        </div>
-                        <div
-                          className="mt-0.5 truncate text-xs text-muted-foreground"
-                          title={repo.full_name}
-                        >
-                          {repo.full_name}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-shrink-0 items-center gap-0.5">
-                        {(!repo.is_queryable || repo.status === "failed") && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label="Re-import repository"
-                                onClick={() => handleReprocessRepo(repo.id)}
-                              >
-                                <RefreshCwIcon />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Re-import</TooltipContent>
-                          </Tooltip>
-                        )}
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              className="text-muted-foreground hover:text-destructive"
-                              aria-label={`Delete ${repo.name}`}
-                              onClick={() => handleRequestDelete(repo)}
+                {repositories.map((repo) => {
+                  const active = String(repo.id) === String(selectedRepoId)
+                  const percent = embeddingPercent(repo)
+                  return (
+                    <li key={repo.id}>
+                      {/*
+                       * A div rather than a button: the card contains its own
+                       * action buttons, and nesting buttons is invalid HTML.
+                       */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-current={active ? "true" : undefined}
+                        onClick={() => onSelectRepo(String(repo.id))}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return
+                          event.preventDefault()
+                          onSelectRepo(String(repo.id))
+                        }}
+                        className={`cursor-pointer rounded-lg border p-3 text-card-foreground shadow-xs transition-colors ${
+                          active
+                            ? "border-primary/60 bg-primary/10 ring-1 ring-primary/30"
+                            : "bg-card hover:border-primary/30 hover:bg-accent/40"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div
+                              className="truncate text-sm font-medium"
+                              title={repo.full_name}
                             >
-                              <Trash2Icon />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Delete</TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </div>
+                              {repo.name}
+                            </div>
+                            <div
+                              className="mt-0.5 truncate text-xs text-muted-foreground"
+                              title={repo.full_name}
+                            >
+                              {repo.full_name}
+                            </div>
+                          </div>
 
-                    <div className="mt-2.5">
-                      <StatusBadge repo={repo} />
-                    </div>
-                  </li>
-                ))}
+                          <div className="flex flex-shrink-0 items-center gap-0.5">
+                            {(!repo.is_queryable || repo.status === "failed") && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label="Re-import repository"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      handleReprocessRepo(repo.id)
+                                    }}
+                                  >
+                                    <RefreshCwIcon />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Re-import</TooltipContent>
+                              </Tooltip>
+                            )}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  className="text-muted-foreground hover:text-destructive"
+                                  aria-label={`Delete ${repo.name}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    handleRequestDelete(repo)
+                                  }}
+                                >
+                                  <Trash2Icon />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Delete</TooltipContent>
+                            </Tooltip>
+                          </div>
+                        </div>
+
+                        <div className="mt-2.5">
+                          <RepoStatusBadge repo={repo} />
+                        </div>
+
+                        {percent !== null && (
+                          <div
+                            className="mt-2.5 h-1 overflow-hidden rounded-full bg-muted"
+                            role="progressbar"
+                            aria-valuenow={percent}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-label={`Embedding ${percent}% complete`}
+                          >
+                            <div
+                              className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out motion-reduce:transition-none"
+                              style={{ width: `${percent}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

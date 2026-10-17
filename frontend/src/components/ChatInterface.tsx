@@ -4,13 +4,17 @@ import { MessageSquareIcon, SendIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+
+type ChatMessage = { role: string; text: string }
+
+type ChatInterfaceProps = {
+  selectedRepoId: string
+  chatHistory: ChatMessage[]
+  chatInput: string
+  setChatInput: (value: string) => void
+  handleAskQuestion: () => void
+  isChatLoading: boolean
+}
 
 function TypingDots() {
   return (
@@ -26,16 +30,20 @@ function TypingDots() {
   )
 }
 
+/**
+ * The message list and composer.
+ *
+ * There is no repository picker in here: the active repository lives in the
+ * shell header, so this view is pure conversation.
+ */
 export default function ChatInterface({
-  repositories,
   selectedRepoId,
-  setSelectedRepoId,
   chatHistory,
   chatInput,
   setChatInput,
   handleAskQuestion,
   isChatLoading,
-}: any) {
+}: ChatInterfaceProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom of chat
@@ -43,37 +51,12 @@ export default function ChatInterface({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [chatHistory, isChatLoading])
 
-  const activeRepos = repositories.filter(
-    (r: any) => r.status === "completed" && r.is_queryable,
-  )
-
   const lastMessage = chatHistory[chatHistory.length - 1]
   const showStandaloneDots =
     isChatLoading && lastMessage?.role !== "assistant"
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex h-16 flex-shrink-0 items-center gap-3 border-b bg-card px-6">
-        <label className="text-sm font-medium text-muted-foreground">
-          Active context
-        </label>
-        <Select
-          value={selectedRepoId ? String(selectedRepoId) : undefined}
-          onValueChange={setSelectedRepoId}
-        >
-          <SelectTrigger className="h-9 w-full max-w-md">
-            <SelectValue placeholder="Select a repository..." />
-          </SelectTrigger>
-          <SelectContent>
-            {activeRepos.map((repo: any) => (
-              <SelectItem key={repo.id} value={String(repo.id)}>
-                {repo.full_name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
       <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
           {chatHistory.length === 0 ? (
@@ -89,7 +72,7 @@ export default function ChatInterface({
               </p>
             </div>
           ) : (
-            chatHistory.map((msg: any, idx: number) => {
+            chatHistory.map((msg, idx) => {
               const isUser = msg.role === "user"
               const isPendingAssistant = !isUser && isChatLoading && !msg.text
               return (
@@ -130,11 +113,7 @@ export default function ChatInterface({
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleAskQuestion()}
-            placeholder={
-              selectedRepoId
-                ? "Ask anything about the code..."
-                : "Select a repository first..."
-            }
+            placeholder="Ask anything about the code..."
             disabled={!selectedRepoId || isChatLoading}
             className="h-11 pr-12"
           />

@@ -7,28 +7,7 @@ import {
 } from "lucide-react"
 
 import LandingArchitecture from "./LandingArchitecture"
-
-/** The product's node-graph mark, matching the favicon. */
-function LogoMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <circle cx="18" cy="5" r="3" />
-      <circle cx="6" cy="12" r="3" />
-      <circle cx="18" cy="19" r="3" />
-      <line x1="8.59" y1="10.51" x2="15.42" y2="6.49" />
-      <line x1="8.59" y1="13.49" x2="15.42" y2="17.51" />
-    </svg>
-  )
-}
+import BrandMark from "../BrandMark"
 
 const FEATURES = [
   {
@@ -83,7 +62,7 @@ export default function LandingView({
 
       <header className="relative z-20 mx-auto flex w-full max-w-7xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-2.5">
-          <LogoMark className="size-7 text-indigo-400" />
+          <BrandMark className="size-7 text-indigo-400" />
           <span className="text-lg font-semibold tracking-tight">
             <span className="text-white">Repo</span>
             <span className="text-indigo-400">Mind</span>
@@ -222,7 +201,7 @@ export default function LandingView({
       <footer className="relative z-10 border-t border-white/10 py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-6 text-sm text-white/50 sm:flex-row">
           <div className="flex items-center gap-2.5">
-            <LogoMark className="size-5 text-indigo-400" />
+            <BrandMark className="size-5 text-indigo-400" />
             <span>RepoMind</span>
           </div>
           <p>See the bigger picture of any codebase.</p>
