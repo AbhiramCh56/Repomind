@@ -1,4 +1,30 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react"
+import { MessageSquareIcon, SendIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+
+function TypingDots() {
+  return (
+    <div className="flex items-center gap-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="size-2 animate-bounce rounded-full bg-muted-foreground/40 motion-reduce:animate-none"
+          style={{ animationDelay: `${i * 0.1}s` }}
+        />
+      ))}
+    </div>
+  )
+}
 
 export default function ChatInterface({
   repositories,
@@ -10,103 +36,96 @@ export default function ChatInterface({
   handleAskQuestion,
   isChatLoading,
 }: any) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom of chat
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, isChatLoading]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [chatHistory, isChatLoading])
 
   const activeRepos = repositories.filter(
     (r: any) => r.status === "completed" && r.is_queryable,
-  );
+  )
+
+  const lastMessage = chatHistory[chatHistory.length - 1]
+  const showStandaloneDots =
+    isChatLoading && lastMessage?.role !== "assistant"
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-white">
-      <div className="h-16 border-b border-gray-200 flex items-center px-6 bg-gray-50 flex-shrink-0">
-        <label className="text-sm font-medium text-gray-700 mr-3">
-          Active Context:
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <div className="flex h-16 flex-shrink-0 items-center gap-3 border-b bg-card px-6">
+        <label className="text-sm font-medium text-muted-foreground">
+          Active context
         </label>
-        <select
-          value={selectedRepoId}
-          onChange={(e) => setSelectedRepoId(e.target.value)}
-          className="flex-1 max-w-md bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2 outline-none"
+        <Select
+          value={selectedRepoId ? String(selectedRepoId) : undefined}
+          onValueChange={setSelectedRepoId}
         >
-          <option value="" disabled>
-            Select a repository...
-          </option>
-          {activeRepos.map((repo: any) => (
-            <option key={repo.id} value={repo.id}>
-              {repo.full_name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-9 w-full max-w-md">
+            <SelectValue placeholder="Select a repository..." />
+          </SelectTrigger>
+          <SelectContent>
+            {activeRepos.map((repo: any) => (
+              <SelectItem key={repo.id} value={String(repo.id)}>
+                {repo.full_name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-gray-50">
-        {chatHistory.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-gray-400">
-            <svg
-              className="w-16 h-16 mb-4 text-gray-300"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <p className="text-lg font-medium text-gray-600">
-              Ask a question about your codebase
-            </p>
-            <p className="text-sm mt-1">
-              E.g., "How does the authentication flow work in this repo?"
-            </p>
-          </div>
-        ) : (
-          chatHistory.map((msg: any, idx: number) => (
-            <div
-              key={idx}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-5 py-3.5 shadow-sm text-sm whitespace-pre-wrap leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-blue-600 text-white rounded-br-none"
-                    : "bg-white border border-gray-100 text-gray-800 rounded-bl-none"
-                }`}
-              >
-                {msg.text}
+      <ScrollArea className="flex-1">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
+          {chatHistory.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-24 text-center text-muted-foreground">
+              <div className="flex size-14 items-center justify-center rounded-2xl bg-muted">
+                <MessageSquareIcon className="size-7" />
+              </div>
+              <p className="text-lg font-medium text-foreground">
+                Ask a question about your codebase
+              </p>
+              <p className="max-w-md text-sm">
+                E.g., "How does the authentication flow work in this repo?"
+              </p>
+            </div>
+          ) : (
+            chatHistory.map((msg: any, idx: number) => {
+              const isUser = msg.role === "user"
+              const isPendingAssistant = !isUser && isChatLoading && !msg.text
+              return (
+                <div
+                  key={idx}
+                  className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-xs ${
+                      isUser
+                        ? "rounded-br-sm bg-primary text-primary-foreground"
+                        : "rounded-bl-sm border bg-card text-card-foreground"
+                    }`}
+                  >
+                    {isPendingAssistant ? <TypingDots /> : msg.text}
+                  </div>
+                </div>
+              )
+            })
+          )}
+
+          {showStandaloneDots && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-sm border bg-card px-4 py-3 shadow-xs">
+                <TypingDots />
               </div>
             </div>
-          ))
-        )}
-        {isChatLoading &&
-          chatHistory[chatHistory.length - 1]?.role !== "assistant" && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-100 text-gray-500 rounded-2xl rounded-bl-none px-5 py-3.5 shadow-sm text-sm flex items-center gap-2">
-              <div className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"></div>
-              <div
-                className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                style={{ animationDelay: "0.1s" }}
-              ></div>
-              <div
-                className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                style={{ animationDelay: "0.2s" }}
-              ></div>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+          )}
 
-      <div className="p-4 bg-white border-t border-gray-200 flex-shrink-0">
-        <div className="max-w-4xl mx-auto relative">
-          <input
+          <div ref={messagesEndRef} />
+        </div>
+      </ScrollArea>
+
+      <div className="flex-shrink-0 border-t bg-card p-4">
+        <div className="relative mx-auto max-w-3xl">
+          <Input
             type="text"
             value={chatInput}
             onChange={(e) => setChatInput(e.target.value)}
@@ -117,29 +136,19 @@ export default function ChatInterface({
                 : "Select a repository first..."
             }
             disabled={!selectedRepoId || isChatLoading}
-            className="w-full pl-4 pr-12 py-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+            className="h-11 pr-12"
           />
-          <button
+          <Button
+            size="icon"
             onClick={handleAskQuestion}
             disabled={!selectedRepoId || isChatLoading || !chatInput.trim()}
-            className="absolute right-2 top-2 p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            aria-label="Send message"
+            className="absolute right-1.5 top-1.5"
           >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 12h14M12 5l7 7-7 7"
-              />
-            </svg>
-          </button>
+            <SendIcon />
+          </Button>
         </div>
       </div>
     </div>
-  );
+  )
 }

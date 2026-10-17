@@ -1,30 +1,54 @@
+import {
+  ChevronUpIcon,
+  FolderGit2Icon,
+  LogOutIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+} from "lucide-react"
+
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+
 // Human-readable label for each in-flight pipeline stage reported by the API.
 const STAGE_LABELS: Record<string, string> = {
   pending: "Queued",
   cloning: "Cloning",
   processing: "Parsing code",
   embedding: "Building index",
-};
-
-const BADGE_BASE =
-  "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium";
+}
 
 function StatusBadge({ repo }: { repo: any }) {
   if (repo.status === "failed") {
     return (
-      <span
-        className={`${BADGE_BASE} bg-red-900 text-red-300`}
-        title={repo.error_message || undefined}
-      >
+      <Badge variant="destructive" title={repo.error_message || undefined}>
         Failed
-      </span>
-    );
+      </Badge>
+    )
   }
   if (repo.status === "completed") {
     if (repo.is_queryable) {
       return (
-        <span
-          className={`${BADGE_BASE} bg-green-900 text-green-300`}
+        <Badge
+          variant="outline"
+          className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
           title={
             repo.has_embeddings
               ? undefined
@@ -32,22 +56,19 @@ function StatusBadge({ repo }: { repo: any }) {
           }
         >
           Ready
-        </span>
-      );
+        </Badge>
+      )
     }
-    return (
-      <span className={`${BADGE_BASE} bg-red-900 text-red-300`}>
-        Needs Re-import
-      </span>
-    );
+    return <Badge variant="destructive">Needs Re-import</Badge>
   }
   return (
-    <span
-      className={`${BADGE_BASE} bg-yellow-900 text-yellow-300 animate-pulse`}
+    <Badge
+      variant="outline"
+      className="animate-pulse border-amber-500/30 bg-amber-500/10 text-amber-600 motion-reduce:animate-none dark:text-amber-400"
     >
       {STAGE_LABELS[repo.status] ?? "Processing..."}
-    </span>
-  );
+    </Badge>
+  )
 }
 
 export default function Sidebar({
@@ -57,97 +78,160 @@ export default function Sidebar({
   setRepoUrl,
   handleAddRepo,
   handleReprocessRepo,
-  handleDeleteRepo,
+  handleRequestDelete,
   handleLogout,
 }: any) {
   return (
-    <div className="w-80 flex flex-col h-screen bg-gray-900 text-white border-r border-gray-800 flex-shrink-0">
-      <div className="p-6 border-b border-gray-800">
-        <h2 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-400">
-          RepoMind AI
-        </h2>
-        <p className="text-xs text-gray-400 mt-1 truncate">
-          {userProfile?.email}
-        </p>
-      </div>
-
-      <div className="p-4 border-b border-gray-800 bg-gray-800/50">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-          Import Repository
-        </h3>
-        <div className="flex flex-col gap-2">
-          <input
-            value={repoUrl}
-            onChange={(e) => setRepoUrl(e.target.value)}
-            placeholder="https://github.com/..."
-            className="w-full px-3 py-2 text-sm bg-gray-900 border border-gray-700 rounded-md focus:ring-1 focus:ring-blue-500 outline-none text-gray-200"
-          />
-          <button
-            onClick={handleAddRepo}
-            className="w-full px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-          >
-            Add to Workspace
-          </button>
+    <aside className="flex w-80 flex-shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+      <div className="flex items-center gap-3 p-5">
+        <div className="flex size-9 flex-shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+          <FolderGit2Icon className="size-5" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="truncate font-heading text-base font-semibold leading-tight">
+            RepoMind AI
+          </h2>
+          <p className="truncate text-xs text-muted-foreground">
+            {userProfile?.email}
+          </p>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-          Your Repositories
-        </h3>
-        {repositories.length === 0 ? (
-          <p className="text-sm text-gray-500 italic">
-            No repositories imported yet.
-          </p>
-        ) : (
-          <ul className="space-y-3">
-            {repositories.map((repo: any) => (
-              <li
-                key={repo.id}
-                className="bg-gray-800 rounded-lg p-3 border border-gray-700"
-              >
-                <div
-                  className="font-medium text-sm truncate"
-                  title={repo.full_name}
-                >
-                  {repo.name}
-                </div>
+      <Separator />
 
-                <div className="mt-2 flex items-center justify-between">
-                  <StatusBadge repo={repo} />
-
-                  <div className="flex gap-2">
-                    {(!repo.is_queryable || repo.status === "failed") && (
-                      <button
-                        onClick={() => handleReprocessRepo(repo.id)}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                        title="Re-import"
-                      >
-                        ↻
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleDeleteRepo(repo.id)}
-                      className="text-xs text-red-400 hover:text-red-300"
-                      title="Delete"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <div className="p-4 border-t border-gray-800">
-        <button
-          onClick={handleLogout}
-          className="w-full px-3 py-2 text-sm text-gray-400 bg-gray-800 rounded-md hover:bg-gray-700 transition-colors"
+      <div className="space-y-3 px-4 py-4">
+        <Label
+          htmlFor="repo-url"
+          className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
         >
-          Log Out
-        </button>
+          Import repository
+        </Label>
+        <Input
+          id="repo-url"
+          value={repoUrl}
+          onChange={(e) => setRepoUrl(e.target.value)}
+          placeholder="https://github.com/..."
+          className="h-9"
+        />
+        <Button
+          className="w-full"
+          onClick={handleAddRepo}
+          disabled={!repoUrl.trim()}
+        >
+          <PlusIcon />
+          Add to workspace
+        </Button>
       </div>
-    </div>
-  );
+
+      <Separator />
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        <h3 className="px-4 pb-3 pt-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Your repositories
+        </h3>
+        <ScrollArea className="flex-1">
+          <div className="px-4 pb-4">
+            {repositories.length === 0 ? (
+              <p className="text-sm italic text-muted-foreground">
+                No repositories imported yet.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {repositories.map((repo: any) => (
+                  <li
+                    key={repo.id}
+                    className="rounded-lg border bg-card p-3 text-card-foreground shadow-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div
+                          className="truncate text-sm font-medium"
+                          title={repo.full_name}
+                        >
+                          {repo.name}
+                        </div>
+                        <div
+                          className="mt-0.5 truncate text-xs text-muted-foreground"
+                          title={repo.full_name}
+                        >
+                          {repo.full_name}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-shrink-0 items-center gap-0.5">
+                        {(!repo.is_queryable || repo.status === "failed") && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label="Re-import repository"
+                                onClick={() => handleReprocessRepo(repo.id)}
+                              >
+                                <RefreshCwIcon />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Re-import</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="text-muted-foreground hover:text-destructive"
+                              aria-label={`Delete ${repo.name}`}
+                              onClick={() => handleRequestDelete(repo)}
+                            >
+                              <Trash2Icon />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5">
+                      <StatusBadge repo={repo} />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </ScrollArea>
+      </div>
+
+      <Separator />
+
+      <div className="p-3">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="h-auto w-full justify-start gap-2 px-2 py-2"
+            >
+              <span className="flex size-7 flex-shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                {(userProfile?.email?.[0] ?? "U").toUpperCase()}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-left text-sm">
+                {userProfile?.email}
+              </span>
+              <ChevronUpIcon className="size-4 flex-shrink-0 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel className="truncate">
+              {userProfile?.email}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={handleLogout}>
+              <LogOutIcon />
+              Log out
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </aside>
+  )
 }

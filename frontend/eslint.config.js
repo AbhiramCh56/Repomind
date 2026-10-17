@@ -19,4 +19,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn/ui components are vendored verbatim (`npx shadcn add`). They
+    // export style variants next to their components, which trips the Vite
+    // fast-refresh rule; that is expected and not worth diverging from upstream.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])
