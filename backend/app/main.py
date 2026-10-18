@@ -19,6 +19,13 @@ Base.metadata.create_all(bind=engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.ENVIRONMENT != "development" and not settings.CLIENT_IP_HEADER:
+        logging.getLogger(__name__).warning(
+            "CLIENT_IP_HEADER is unset, so the auth rate limiter keys per-IP "
+            "budgets on the socket peer. Behind a proxy every request reports "
+            "that proxy and a few failed logins lock out all users. Set it to "
+            "the platform's client-IP header (cf-connecting-ip on Render)."
+        )
     # Overlap the ~7s model load with login instead of blocking startup or
     # making the first question wait.
     warm_embedding_model_in_background()

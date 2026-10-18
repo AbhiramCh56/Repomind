@@ -28,6 +28,36 @@ class Settings(BaseSettings):
     # removing the routes or the chat history. Re-enable once hardened.
     CHAT_ENABLED: bool = True
 
+    # In-process auth rate limiting (see app/core/rate_limit.py). Counters live
+    # in one worker's memory, so scaling past a single worker or instance means
+    # moving the store to something shared (Redis). Set false to disable.
+    RATE_LIMIT_ENABLED: bool = True
+    # Hard cap on tracked keys so distinct spoofed IPs/usernames cannot grow the
+    # store without bound.
+    RATE_LIMIT_MAX_KEYS: int = 10_000
+    # Login: many attempts from one address, and few on one account from any.
+    LOGIN_IP_LIMIT: int = 20
+    LOGIN_IP_WINDOW_SECONDS: int = 300
+    LOGIN_ACCOUNT_LIMIT: int = 5
+    LOGIN_ACCOUNT_WINDOW_SECONDS: int = 900
+    # Registration is rare and cheap; keep it strict.
+    REGISTER_IP_LIMIT: int = 5
+    REGISTER_IP_WINDOW_SECONDS: int = 3600
+    # Refresh is called automatically, so the budget is generous.
+    REFRESH_IP_LIMIT: int = 60
+    REFRESH_IP_WINDOW_SECONDS: int = 3600
+
+    # Header that carries the true client address when a proxy fronts the app.
+    # On Render all traffic arrives through Cloudflare, which sets
+    # CF-Connecting-IP to the real client and overwrites anything a client
+    # sends, so set CLIENT_IP_HEADER=cf-connecting-ip there. Leave unset when
+    # the app is directly reachable (local dev), where request.client is the
+    # real peer. Only point this at a header the edge controls; x-forwarded-for
+    # is client-forgeable. If it is unset behind a proxy, every request reports
+    # the proxy, all clients share one per-IP bucket, and a few failed logins
+    # lock out everyone.
+    CLIENT_IP_HEADER: str | None = None
+
     # LLM API keys
     OPENAI_API_KEY: str | None = None
     NVIDIA_API_KEY: str | None = None
